@@ -120,7 +120,7 @@ class GeminiProvider:
             types.FunctionDeclaration(
                 name=tool["name"],
                 description=tool["description"],
-                parameters=tool["input_schema"],
+                parameters=self._function_parameters(tool["input_schema"]),
             )
             for tool in tools
         ]
@@ -144,6 +144,29 @@ class GeminiProvider:
             if getattr(part, "function_call", None)
         ]
         return ProviderResponse(text=text, tool_calls=calls)
+
+    @staticmethod
+    def _function_parameters(input_schema: dict[str, Any]) -> dict[str, Any]:
+        """Convert registry JSON Schema to the subset accepted by Gemini tools.
+
+        ``additionalProperties`` and ``anyOf`` are useful for strict local
+        validation, but the Gemini SDK rejects them in
+        ``FunctionDeclaration.parameters``. Work on a copy so the registry
+        continues enforcing the original schema.
+        """
+
+        def sanitize(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: sanitize(item)
+                    for key, item in value.items()
+                    if key not in {"additionalProperties", "anyOf"}
+                }
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            return value
+
+        return sanitize(deepcopy(input_schema))
 
     @staticmethod
     def _contents(history: list[dict[str, Any]]) -> list[Any]:

@@ -62,6 +62,48 @@ def test_gemini_adapter_parses_text_and_function_call(monkeypatch):
     assert response.tool_calls == [ToolCall("call-1", "get_drive_file", {"file_id": "id"})]
 
 
+def test_gemini_adapter_removes_unsupported_additional_properties(monkeypatch):
+    provider = GeminiProvider(api_key="fake-key", model="gemini-test")
+    captured = {}
+    fake_response = SimpleNamespace(candidates=[])
+
+    def fake_generate_content(**kwargs):
+        captured.update(kwargs)
+        return fake_response
+
+    monkeypatch.setattr(provider.client.models, "generate_content", fake_generate_content)
+    schema = {
+        "type": "object",
+        "properties": {
+            "options": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer"}},
+                "additionalProperties": False,
+            }
+        },
+        "anyOf": [{"required": ["options"]}],
+        "additionalProperties": False,
+    }
+
+    provider.complete(
+        system_prompt="test",
+        tools=[{"name": "search", "description": "search", "input_schema": schema}],
+        history=[{"role": "user", "text": "Search"}],
+    )
+
+    parameters = (
+        captured["config"].tools[0].function_declarations[0].parameters.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+    )
+    assert "additionalProperties" not in parameters
+    assert "anyOf" not in parameters
+    assert "additionalProperties" not in parameters["properties"]["options"]
+    assert schema["additionalProperties"] is False
+    assert schema["anyOf"] == [{"required": ["options"]}]
+
+
 @pytest.mark.parametrize(
     ("provider", "message"),
     [(GeminiProvider, "GEMINI_API_KEY"), (AnthropicProvider, "ANTHROPIC_API_KEY")],
