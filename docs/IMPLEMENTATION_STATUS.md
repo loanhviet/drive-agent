@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: Milestone 7 is complete and awaiting review/commit.
+Last updated: Milestone 8 is complete and awaiting review/commit.
 
 ## Completed commits
 
@@ -12,6 +12,7 @@ d93c331 feat: add file reader
 169b798 feat: add google drive tools
 4b9ca97 feat: add qdrant memory
 02983d8 feat: add memory tools
+68cc074 feat: integrate agent ui
 ```
 
 ## Completed work
@@ -34,11 +35,14 @@ d93c331 feat: add file reader
 - Agent now supports Gemini (default) and Anthropic through a provider-neutral tool-use interface.
 - The UI has JWT login, user/role display, session restoration, authenticated chat/audit calls, and safe audit rendering.
 - Offline agent integration tests cover list/download/read/save/search across a new agent session.
-- Last full successful checks: 87 tests passed; agent/provider/server coverage 91%; Ruff and compile passed.
+- Docker Compose runs a pinned Qdrant service with a persistent named volume; the app container uses `.env` by default.
+- GitHub Actions runs Ruff and the offline test suite without secrets.
+- Pre-commit checks large files, merge conflicts, private keys, whitespace, and Ruff.
+- README documents setup, architecture, API, security, test strategy, Docker, and the assignment demo flow.
 
 ## Current worktree changes (not committed)
 
-Milestone 7 is implemented and ready for review:
+Milestone 8 is implemented and ready for review:
 
 ```text
 list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
@@ -46,16 +50,14 @@ list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
 
 Implemented changes:
 
-- Added `services/llm.py` with Gemini, Anthropic, and scripted test providers.
-- Replaced Claude-only Agent implementation with a bounded generic tool loop.
-- Chat API returns tools used directly from Agent, rather than relying on audit log ordering.
-- Static UI now authenticates through `/api/auth/login` and calls protected routes with a Bearer token.
+- Added Dockerfile, Docker Compose, `.dockerignore`, CI workflow, and pre-commit config.
+- Expanded README into portfolio documentation.
 
 ## Required next steps
 
-1. Review and commit Milestone 7. Proposed simple commit: `feat: integrate agent ui`.
-2. Start Milestone 8: Docker Compose, CI, README portfolio documentation, and final demo instructions.
-3. Keep live providers opt-in; do not use or fabricate API keys or Google credentials.
+1. Review and commit Milestone 8. Proposed simple commits: `build: add docker ci` and `docs: update readme`.
+2. Before a real demo, create `.env`, users, and configure your own Gemini/Google Drive credentials.
+3. Do not push until you have reviewed `git status`, the README, and the complete test result.
 
 ## Important constraints
 
