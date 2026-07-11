@@ -2,17 +2,19 @@
 FastAPI Server - Serves the Agent via HTTP API + HTML chat UI on port 9004.
 """
 
-import json
 import traceback
+from pathlib import Path
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent import Agent
 
 app = FastAPI(title="AI Agent - Assignment 1")
+STATIC_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,13 +42,17 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
-    tools_used: list[str] = []
+    tools_used: list[str] = Field(default_factory=list)
+
+
+class ClearRequest(BaseModel):
+    session_id: str = "default"
 
 
 # ---- API Endpoints ----
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
+async def chat(req: ChatRequest):
     try:
         agent = get_agent(req.session_id)
         audit_before = len(agent.get_audit_log())
@@ -65,7 +71,7 @@ def chat(req: ChatRequest):
 
 
 @app.post("/api/clear")
-def clear_session(req: ChatRequest):
+async def clear_session(req: ClearRequest):
     session_id = req.session_id or "default"
     if session_id in sessions:
         sessions[session_id].clear_history()
@@ -73,21 +79,21 @@ def clear_session(req: ChatRequest):
 
 
 @app.get("/api/audit")
-def get_audit(session_id: str = "default"):
+async def get_audit(session_id: str = "default"):
     agent = get_agent(session_id)
     return {"audit_log": agent.get_audit_log()}
 
 
 @app.get("/api/health")
-def health():
+async def health():
     return {"status": "ok", "port": 9004}
 
 
 # ---- Serve HTML UI ----
 
 @app.get("/", response_class=HTMLResponse)
-def serve_ui():
-    with open("static/index.html", "r", encoding="utf-8") as f:
+async def serve_ui():
+    with STATIC_INDEX.open("r", encoding="utf-8") as f:
         return f.read()
 
 

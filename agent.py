@@ -5,7 +5,7 @@ Handles the full conversation loop with tool use.
 
 import json
 import anthropic
-from config import LLM_MODEL
+from config import ANTHROPIC_API_KEY, LLM_MODEL
 from registry import ToolRegistry, ToolDefinition
 
 from tools.google_drive import ALL_DRIVE_TOOLS
@@ -31,7 +31,7 @@ Guidelines:
 
 class Agent:
     def __init__(self, service_api_key: str = "sk-admin-001"):
-        self.client = anthropic.Anthropic()
+        self.client: anthropic.Anthropic | None = None
         self.model = LLM_MODEL
         self.service_api_key = service_api_key
         self.conversation_history: list[dict] = []
@@ -40,6 +40,17 @@ class Agent:
         self.registry = ToolRegistry()
         for tool in ALL_TOOLS:
             self.registry.register(tool)
+
+    def _get_client(self) -> anthropic.Anthropic:
+        """Create the external LLM client only when chat is requested."""
+        if not ANTHROPIC_API_KEY:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is required to send chat messages. "
+                "Health, UI, and audit endpoints can run without it."
+            )
+        if self.client is None:
+            self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        return self.client
 
     def get_tools_for_claude(self) -> list[dict]:
         return self.registry.list_tools()
@@ -64,8 +75,8 @@ class Agent:
         tools = self.get_tools_for_claude()
 
         while True:
-            print(f"\n>>> Calling Claude LLM...")
-            response = self.client.messages.create(
+            print("\n>>> Calling Claude LLM...")
+            response = self._get_client().messages.create(
                 model=self.model,
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
