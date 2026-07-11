@@ -3,6 +3,7 @@ CLI Interface - Interactive chat with the Agent.
 """
 
 import json
+import os
 import sys
 from agent import Agent
 
@@ -25,7 +26,11 @@ def main():
     print("  Capabilities: Google Drive | Read File | RAG Memory")
     print("="*60)
 
-    agent = Agent(service_api_key="sk-admin-001")
+    access_token = os.getenv("APP_ACCESS_TOKEN", "")
+    if not access_token:
+        print("[Error: APP_ACCESS_TOKEN is required. Login through the API to obtain a JWT.]")
+        return
+    agent = Agent(service_api_key=access_token, session_id="cli")
 
     print_help()
 

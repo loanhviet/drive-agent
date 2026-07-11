@@ -1,11 +1,20 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
+BASE_DIR = Path(__file__).resolve().parent
+
+# Application
+APP_DB_PATH = os.getenv("APP_DB_PATH", str(BASE_DIR / ".data" / "drive_agent.db"))
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+
 # LLM
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-LLM_MODEL = "claude-sonnet-4-20250514"
+LLM_MODEL = os.getenv("LLM_MODEL") or "claude-sonnet-4-20250514"
 
 # Embeddings
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

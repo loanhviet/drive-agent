@@ -30,10 +30,11 @@ Guidelines:
 
 
 class Agent:
-    def __init__(self, service_api_key: str = "sk-admin-001"):
+    def __init__(self, service_api_key: str, session_id: str = "default"):
         self.client: anthropic.Anthropic | None = None
         self.model = LLM_MODEL
         self.service_api_key = service_api_key
+        self.session_id = session_id
         self.conversation_history: list[dict] = []
 
         # Initialize Tool Registry with all tools
@@ -127,6 +128,7 @@ class Agent:
                             tool_name=tool_name,
                             arguments=tool_input,
                             api_key=self.service_api_key,
+                            session_id=self.session_id,
                         )
 
                         tool_results.append({

@@ -1,5 +1,8 @@
 import agent as agent_module
 import pytest
+from registry.models import ToolDefinition
+from registry.registry import ToolRegistry
+from services.audit import get_audit_store
 
 
 @pytest.mark.anyio
@@ -21,30 +24,117 @@ async def test_ui_is_served_outside_project_working_directory(client, monkeypatc
 
 
 @pytest.mark.anyio
-async def test_audit_starts_empty_without_llm_api_key(client):
-    response = await client.get("/api/audit", params={"session_id": "smoke-test"})
+async def test_audit_requires_authentication(client):
+    response = await client.get("/api/audit")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_audit_starts_empty(client, admin_token):
+    response = await client.get(
+        "/audit",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"audit_log": []}
 
 
 @pytest.mark.anyio
-async def test_clear_only_requires_session_id(client):
-    response = await client.post("/api/clear", json={"session_id": "smoke-test"})
+async def test_clear_only_requires_session_id(client, admin_token):
+    response = await client.post(
+        "/api/clear",
+        json={"session_id": "smoke-test"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"status": "cleared", "session_id": "smoke-test"}
 
 
 @pytest.mark.anyio
-async def test_chat_returns_structured_error_without_llm_api_key(client, monkeypatch):
+async def test_chat_returns_structured_error_without_llm_api_key(
+    client, monkeypatch, admin_token
+):
     monkeypatch.setattr(agent_module, "ANTHROPIC_API_KEY", None)
 
     response = await client.post(
         "/api/chat",
         json={"session_id": "smoke-test", "message": "Hello"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     assert response.status_code == 500
     assert response.json()["tools_used"] == []
     assert "ANTHROPIC_API_KEY" in response.json()["response"]
+
+
+@pytest.mark.anyio
+async def test_login_and_me(client):
+    login = await client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin-password"},
+    )
+
+    assert login.status_code == 200
+    payload = login.json()
+    assert payload["token_type"] == "bearer"
+    assert payload["user"]["role"] == "admin"
+
+    me = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {payload['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["user_id"] == "admin-id"
+
+
+@pytest.mark.anyio
+async def test_login_rejects_wrong_password(client):
+    response = await client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong-password"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_user_only_sees_own_audit_logs(
+    client, isolated_services, admin_token, user_token
+):
+    store = get_audit_store()
+    tool = ToolDefinition(
+        name="visible_tool",
+        description="Audit visibility test.",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        required_scopes=[],
+        handler=lambda: {"ok": True},
+    )
+    for actor in (
+        {"user_id": "admin-id", "role": "admin", "scopes": []},
+        {"user_id": "user-id", "role": "user", "scopes": []},
+    ):
+        registry = ToolRegistry(authenticator=lambda _token, actor=actor: actor, audit_store=store)
+        registry.register(tool)
+        registry.call("visible_tool", {}, "token")
+
+    user_response = await client.get(
+        "/audit",
+        headers={"Authorization": f"Bearer {user_token}"},
+    )
+    admin_response = await client.get(
+        "/audit",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert {log["user_id"] for log in user_response.json()["audit_log"]} == {"user-id"}
+    assert {log["user_id"] for log in admin_response.json()["audit_log"]} == {
+        "admin-id",
+        "user-id",
+    }

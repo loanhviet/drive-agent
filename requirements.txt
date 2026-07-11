@@ -10,3 +10,6 @@ markitdown>=0.1.0,<0.2.0
 fastapi>=0.115.0,<0.116.0
 uvicorn>=0.30.0,<0.31.0
 anyio>=4.4.0,<4.7.0
+jsonschema>=4.23.0,<5.0.0
+PyJWT>=2.9.0,<3.0.0
+pwdlib[argon2]>=0.2.0,<1.0.0
