@@ -1,6 +1,6 @@
 # Drive Agent
 
-Drive Agent is a Python AI-agent project that demonstrates secure tool calling, Google Drive document reading, and persistent RAG memory. It was built as an assignment and then extended into a portfolio-ready backend with JWT authentication, RBAC, audit trails, tests, and reproducible local infrastructure.
+Drive Agent is a Python-based AI assistant that securely connects conversational workflows with Google Drive and long-term semantic memory. It combines provider-neutral LLM tool calling, document extraction, retrieval-augmented generation (RAG), JWT authentication, role-based access control, and auditable tool execution in a reproducible local environment.
 
 ## What it demonstrates
 
@@ -30,8 +30,8 @@ flowchart LR
 ## Quick start
 
 ```bash
-git clone <your-repository-url>
-cd Assignment-1-TODO
+git clone <https://github.com/loanhviet/drive-agent>
+cd drive-agent
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 cp .env.example .env
@@ -82,7 +82,7 @@ To validate the Compose file without creating a local `.env`, run:
 ENV_FILE=.env.example docker compose config
 ```
 
-## Demo scenarios
+## Demo
 
 1. Ask to list Drive files. The agent uses `list_drive_files`.
 2. Ask to read a file. The agent uses `get_drive_file`, then `read_file_tool`.
