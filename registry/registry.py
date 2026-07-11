@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 from services.audit import AuditStore, get_audit_store, sanitize
 from services.auth import AuthenticationError, get_auth_service
 
+from .context import execution_context
 from .models import ToolDefinition
 
 PIPELINE_STEPS = (
@@ -97,9 +98,16 @@ class RateLimiter:
         return True
 
 
-def execute_tool(tool: ToolDefinition, arguments: dict[str, Any]) -> Any:
+def execute_tool(
+    tool: ToolDefinition,
+    arguments: dict[str, Any],
+    actor: dict[str, Any] | None = None,
+) -> Any:
     """Call a registered handler with validated keyword arguments."""
-    return tool.handler(**arguments)
+    if actor is None:
+        return tool.handler(**arguments)
+    with execution_context(actor):
+        return tool.handler(**arguments)
 
 
 def _new_steps() -> list[dict[str, Any]]:
@@ -211,7 +219,7 @@ class ToolRegistry:
             result = self._run_step(
                 steps,
                 current_step,
-                lambda: execute_tool(tool, validated_arguments),
+                lambda: execute_tool(tool, validated_arguments, actor),
             )
         except Exception as error:
             self._mark_failure_if_pending(steps, current_step, error)

@@ -3,33 +3,59 @@ Read File Tool - Read and convert files to Markdown using MarkItDown.
 """
 
 from registry.models import ToolDefinition
+from registry.context import get_current_actor
+from services.artifacts import get_artifact_store
+from services.documents import get_document_cache
 from services.file_reader import read_file
 
 
-def read_local_file(file_path: str) -> dict:
-    """Read a local file and convert to Markdown."""
-    return read_file(file_path)
+def read_file_tool(artifact_id: str) -> dict:
+    """Read one user-owned Drive artifact and remove its temporary file."""
+    actor = get_current_actor()
+    artifact = get_artifact_store().consume(artifact_id, actor["user_id"])
+    try:
+        full_result = read_file(artifact.path, max_chars=None)
+    finally:
+        get_artifact_store().delete_file(artifact.path)
+
+    document = get_document_cache().put(
+        actor["user_id"],
+        full_result["content"],
+        {
+            **artifact.metadata,
+            "source_type": "drive_file",
+        },
+    )
+    preview = full_result["content"][:15000]
+    return {
+        **artifact.metadata,
+        "document_ref": document.document_ref,
+        "content": preview,
+        "total_chars": full_result["total_chars"],
+        "is_truncated": len(preview) < full_result["total_chars"],
+    }
 
 
 read_file_tool = ToolDefinition(
-    name="read_file",
+    name="read_file_tool",
     description=(
-        "Read a local file and convert its content to Markdown. "
-        "Supports many formats: PDF, DOCX, XLSX, PPTX, images, text files, and more. "
-        "Provide the full file path."
+        "Read the content of a previously downloaded Google Drive artifact and convert it to Markdown. "
+        "Pass the artifact_id returned by get_drive_file. "
+        "The result includes document_ref for save_memory when the user asks to save the file content."
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "file_path": {
+            "artifact_id": {
                 "type": "string",
-                "description": "The full path to the local file to read.",
+                "description": "The artifact ID returned by get_drive_file.",
             },
         },
-        "required": ["file_path"],
+        "required": ["artifact_id"],
+        "additionalProperties": False,
     },
     required_scopes=["drive:read"],
-    handler=read_local_file,
+    handler=read_file_tool,
 )
 
 

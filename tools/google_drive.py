@@ -3,8 +3,9 @@ Google Drive Tools - List files and read file content.
 """
 
 from registry.models import ToolDefinition
+from registry.context import get_current_actor
 from services import drive_service
-from services.file_reader import read_file
+from services.artifacts import get_artifact_store
 
 
 # ============================================================
@@ -37,6 +38,7 @@ list_files_tool = ToolDefinition(
             },
         },
         "required": [],
+        "additionalProperties": False,
     },
     required_scopes=["drive:read"],
     handler=list_drive_files,
@@ -44,47 +46,46 @@ list_files_tool = ToolDefinition(
 
 
 # ============================================================
-# Tool 2: READ DRIVE FILE
+# Tool 2: DOWNLOAD DRIVE FILE
 # ============================================================
 
-def read_drive_file(file_id: str) -> dict:
-    """Download a file from Google Drive and read its content."""
-    import os
+def get_drive_file(file_id: str) -> dict:
+    """Download a Drive file and return a short-lived artifact ID."""
+    actor = get_current_actor()
     download = drive_service.download_file(file_id=file_id)
-    temp_path = download["temp_path"]
     try:
-        result = read_file(temp_path)
-    finally:
-        os.unlink(temp_path)
+        artifact = get_artifact_store().register(actor["user_id"], download)
+    except Exception:
+        get_artifact_store().delete_file(download["temp_path"])
+        raise
     return {
-        "file_id": download["file_id"],
-        "file_name": download["file_name"],
-        "mime_type": download["mime_type"],
-        "content": result["content"],
+        "artifact_id": artifact.artifact_id,
+        "file_id": artifact.metadata["file_id"],
+        "file_name": artifact.metadata["file_name"],
+        "mime_type": artifact.metadata["mime_type"],
     }
 
 
-read_file_tool = ToolDefinition(
-    name="read_drive_file",
+get_drive_file_tool = ToolDefinition(
+    name="get_drive_file",
     description=(
-        "Read the content of a file from Google Drive by its file ID. "
-        "Supports many formats: PDF, DOCX, XLSX, PPTX, images, Google Docs/Sheets/Slides, text files, and more. "
-        "Content is converted to Markdown using MarkItDown. "
-        "Use list_drive_files first to get file IDs."
+        "Download a Google Drive file by its file ID and return an artifact_id. "
+        "Use list_drive_files first to get a file ID, then pass this artifact_id to read_file_tool."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "file_id": {
                 "type": "string",
-                "description": "The Google Drive file ID to read.",
+                "description": "The Google Drive file ID to download.",
             },
         },
         "required": ["file_id"],
+        "additionalProperties": False,
     },
     required_scopes=["drive:read"],
-    handler=read_drive_file,
+    handler=get_drive_file,
 )
 
 
-ALL_DRIVE_TOOLS = [list_files_tool, read_file_tool]
+ALL_DRIVE_TOOLS = [list_files_tool, get_drive_file_tool]

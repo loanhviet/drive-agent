@@ -43,7 +43,7 @@ def _clean_content(content: str) -> str:
     return re.sub(r"\n{4,}", "\n\n\n", normalized).strip()
 
 
-def read_file(file_path: str) -> dict:
+def read_file(file_path: str, max_chars: int | None = MAX_CHARS) -> dict:
     """Read a local file and convert its content to Markdown using MarkItDown."""
     path = Path(file_path).expanduser()
     if not path.exists():
@@ -68,11 +68,13 @@ def read_file(file_path: str) -> dict:
     if not content:
         raise ValueError(f"No readable content found in '{path.name}'")
 
+    if max_chars is not None and max_chars < 1:
+        raise ValueError("max_chars must be positive or None")
     total_chars = len(content)
-    is_truncated = total_chars > MAX_CHARS
+    is_truncated = max_chars is not None and total_chars > max_chars
     return {
         "file_name": path.name,
-        "content": content[:MAX_CHARS] if is_truncated else content,
+        "content": content[:max_chars] if is_truncated else content,
         "total_chars": total_chars,
         "is_truncated": is_truncated,
     }

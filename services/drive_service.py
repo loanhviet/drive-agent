@@ -34,23 +34,32 @@ def _get_service():
 def list_files(folder_id: str = None, page_size: int = 50) -> list[dict]:
     """List files in Google Drive (optionally within a specific folder)."""
     service = _get_service()
+    if not 1 <= page_size <= 1000:
+        raise ValueError("page_size must be between 1 and 1000")
 
     query_parts = ["trashed = false"]
     if folder_id:
-        query_parts.append(f"'{folder_id}' in parents")
+        query_parts.append(f"'{folder_id.replace("'", "\\'")}' in parents")
     elif GOOGLE_DRIVE_FOLDER_ID:
-        query_parts.append(f"'{GOOGLE_DRIVE_FOLDER_ID}' in parents")
+        safe_folder_id = GOOGLE_DRIVE_FOLDER_ID.replace("'", "\\'")
+        query_parts.append(f"'{safe_folder_id}' in parents")
 
     query = " and ".join(query_parts)
+    files: list[dict] = []
+    page_token = None
+    while True:
+        results = service.files().list(
+            q=query,
+            pageSize=page_size,
+            pageToken=page_token,
+            fields="nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+            orderBy="modifiedTime desc",
+        ).execute()
+        files.extend(results.get("files", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
 
-    results = service.files().list(
-        q=query,
-        pageSize=page_size,
-        fields="files(id, name, mimeType, size, modifiedTime)",
-        orderBy="modifiedTime desc",
-    ).execute()
-
-    files = results.get("files", [])
     return [
         {
             "id": f["id"],
