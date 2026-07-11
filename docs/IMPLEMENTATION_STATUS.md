@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: Milestone 4 is complete and awaiting review/commit.
+Last updated: Milestone 5 is complete and awaiting review/commit.
 
 ## Completed commits
 
@@ -9,6 +9,7 @@ Last updated: Milestone 4 is complete and awaiting review/commit.
 9814152 fix: setup fastapi server
 dfbea8a feat: add tool registry pipeline
 d93c331 feat: add file reader
+169b798 feat: add google drive tools
 ```
 
 ## Completed work
@@ -22,11 +23,15 @@ d93c331 feat: add file reader
 - Google Drive flow now follows the assignment contract: `list_drive_files` -> `get_drive_file` -> `read_file_tool`.
 - Downloaded files are user-scoped temporary artifacts and are deleted after reading, after reader errors, or after expiry.
 - Full extracted text is retained in a short-lived user-scoped `document_ref` cache for Milestone 6 RAG saving.
-- Last full successful checks: 43 tests passed; Drive/artifact/document coverage 86%; Ruff and compile passed.
+- Gemini (default) and OpenAI embedding adapters are available behind one interface; test runs inject a fake provider and do not call APIs.
+- Text chunking uses 1,000 characters with 150 overlap by default.
+- Qdrant supports persistent local storage for development/tests and remote server configuration for Docker deployment.
+- Collection names are namespaced by embedding provider/model/dimension to prevent mixing incompatible vectors.
+- Last focused RAG checks: 23 tests passed; RAG coverage 91%; Ruff passed.
 
 ## Current worktree changes (not committed)
 
-Milestone 4 is implemented and ready for review:
+Milestone 5 is implemented and ready for review:
 
 ```text
 list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
@@ -34,20 +39,15 @@ list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
 
 Implemented changes:
 
-- Added `registry/context.py`: trusted tool handlers can read the authenticated actor through a `ContextVar` without changing handler schemas.
-- Updated `registry/registry.py`: execution runs handlers inside this actor context.
-- Added `services/artifacts.py`: short-lived user-scoped Drive download artifacts; consuming or expiring one removes its temporary file.
-- Added `services/documents.py`: short-lived user-scoped cache for full extracted document content; later `save_memory(document_ref=...)` will use it in Milestone 6.
-- Updated `services/file_reader.py`: `read_file(..., max_chars=None)` returns full content for the document cache while preserving the default 15,000-character preview behavior.
-- Updated `services/drive_service.py`: list pagination and page-size validation.
-- Updated `tools/google_drive.py`: replaces the old combined `read_drive_file` tool with `get_drive_file`.
-- Updated `tools/read_file.py`: replaces `read_file` with PDF-required `read_file_tool`, consumes an artifact, extracts content, creates `document_ref`, and deletes its temporary file in `finally`.
+- Added `services/chunking.py`.
+- Replaced embedding TODOs with batch/query embedding abstraction and provider validation/cache.
+- Replaced vectorstore TODOs with Qdrant collection creation, cosine search, metadata payloads, user filters, and persistent local client support.
 
 ## Required next steps
 
-1. Review and commit Milestone 4. Proposed simple commit: `feat: add google drive tools`.
-2. Start Milestone 5: configurable Gemini/OpenAI embeddings, a lightweight chunker, and persistent Qdrant vector storage.
-3. Keep live Google Drive tests opt-in; do not use or fabricate credentials.
+1. Review and commit Milestone 5. Proposed simple commit: `feat: add qdrant memory`.
+2. Start Milestone 6: implement `save_memory` and `search_memory` for short facts and `document_ref` RAG content.
+3. Keep live providers opt-in; do not use or fabricate API keys or Google credentials.
 
 ## Important constraints
 

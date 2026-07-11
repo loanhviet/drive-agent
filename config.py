@@ -15,16 +15,27 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 # LLM
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL") or "claude-sonnet-4-20250514"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Embeddings
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "gemini-embedding-001"
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
 
 # Qdrant
+QDRANT_MODE = os.getenv("QDRANT_MODE", "local")
+QDRANT_PATH = os.getenv("QDRANT_PATH", str(BASE_DIR / ".data" / "qdrant"))
+QDRANT_URL = os.getenv("QDRANT_URL", "")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
-MEMORY_COLLECTION = "agent_memory"
+MEMORY_COLLECTION = os.getenv("MEMORY_COLLECTION", "agent_memory")
+
+# RAG
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
+MEMORY_SCORE_THRESHOLD = float(os.getenv("MEMORY_SCORE_THRESHOLD", "0.3"))
 
 # Google Drive
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
