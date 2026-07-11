@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: Milestone 5 is complete and awaiting review/commit.
+Last updated: Milestone 6 is complete and awaiting review/commit.
 
 ## Completed commits
 
@@ -10,6 +10,7 @@ Last updated: Milestone 5 is complete and awaiting review/commit.
 dfbea8a feat: add tool registry pipeline
 d93c331 feat: add file reader
 169b798 feat: add google drive tools
+4b9ca97 feat: add qdrant memory
 ```
 
 ## Completed work
@@ -27,11 +28,13 @@ d93c331 feat: add file reader
 - Text chunking uses 1,000 characters with 150 overlap by default.
 - Qdrant supports persistent local storage for development/tests and remote server configuration for Docker deployment.
 - Collection names are namespaced by embedding provider/model/dimension to prevent mixing incompatible vectors.
-- Last focused RAG checks: 23 tests passed; RAG coverage 91%; Ruff passed.
+- `save_memory` now stores short facts as one vector and documents as chunks, with user-scoped content-hash deduplication.
+- `search_memory` performs semantic search only within the authenticated user's memory and returns `insufficient_data` when no result meets the score threshold.
+- Last full successful checks: 76 tests passed; Ruff and compile passed.
 
 ## Current worktree changes (not committed)
 
-Milestone 5 is implemented and ready for review:
+Milestone 6 is implemented and ready for review:
 
 ```text
 list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
@@ -39,14 +42,14 @@ list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
 
 Implemented changes:
 
-- Added `services/chunking.py`.
-- Replaced embedding TODOs with batch/query embedding abstraction and provider validation/cache.
-- Replaced vectorstore TODOs with Qdrant collection creation, cosine search, metadata payloads, user filters, and persistent local client support.
+- Added Qdrant content-hash lookup for deduplication.
+- Replaced memory TODOs with fact/document save and semantic search tools.
+- `document_ref` is consumed only after successful document storage.
 
 ## Required next steps
 
-1. Review and commit Milestone 5. Proposed simple commit: `feat: add qdrant memory`.
-2. Start Milestone 6: implement `save_memory` and `search_memory` for short facts and `document_ref` RAG content.
+1. Review and commit Milestone 6. Proposed simple commit: `feat: add memory tools`.
+2. Start Milestone 7: add Gemini/Anthropic chat providers, login UI, and agent integration tests.
 3. Keep live providers opt-in; do not use or fabricate API keys or Google credentials.
 
 ## Important constraints

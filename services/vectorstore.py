@@ -126,6 +126,23 @@ class VectorStore:
             for point in response.points
         ]
 
+    def has_content_hash(self, user_id: str, content_hash: str) -> bool:
+        """Return whether this user already stored the same source content."""
+        self.ensure_collection()
+        points, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="content_hash", match=MatchValue(value=content_hash)),
+                ]
+            ),
+            limit=1,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return bool(points)
+
     def list_all_memories(self, limit: int = 100, user_id: str | None = None) -> list[dict[str, Any]]:
         self.ensure_collection()
         scroll_filter = None
@@ -189,6 +206,10 @@ def search_memory(
     query_vector: list[float], top_k: int = 5, user_id: str | None = None
 ) -> list[dict[str, Any]]:
     return get_vector_store().search_memory(query_vector, top_k, user_id)
+
+
+def has_content_hash(user_id: str, content_hash: str) -> bool:
+    return get_vector_store().has_content_hash(user_id, content_hash)
 
 
 def list_all_memories(limit: int = 100, user_id: str | None = None) -> list[dict[str, Any]]:
