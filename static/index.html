@@ -52,6 +52,22 @@
         .btn:hover { background: #475569; color: #f1f5f9; }
         .btn-danger { border-color: #ef4444; color: #fca5a5; }
         .btn-danger:hover { background: #dc2626; color: #fff; }
+        .actor { align-self: center; color: #94a3b8; font-size: 12px; }
+        .login-panel {
+            position: fixed; inset: 0; z-index: 200;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(15, 23, 42, 0.92);
+        }
+        .login-card {
+            width: min(360px, calc(100vw - 32px)); padding: 24px;
+            border: 1px solid #334155; border-radius: 12px; background: #1e293b;
+        }
+        .login-card h2 { margin-bottom: 16px; font-size: 18px; }
+        .login-card input {
+            width: 100%; margin: 6px 0 12px; padding: 10px; border-radius: 7px;
+            border: 1px solid #475569; background: #0f172a; color: #e2e8f0;
+        }
+        .login-error { min-height: 18px; color: #fca5a5; font-size: 12px; }
 
         /* Chat area */
         .chat-container {
@@ -225,12 +241,26 @@
 <div class="header">
     <div>
         <h1>AI Agent - Assignment 1</h1>
-        <div class="subtitle">Google Drive | Code Sandbox | RAG Memory | Tool Registry 6-step</div>
+        <div class="subtitle">Google Drive | RAG Memory | Tool Registry 6-step</div>
     </div>
     <div class="header-actions">
+        <span class="actor" id="actorLabel">Not signed in</span>
         <button class="btn" onclick="toggleAudit()">Audit Log</button>
         <button class="btn btn-danger" onclick="clearChat()">Clear</button>
+        <button class="btn" onclick="logout()">Logout</button>
     </div>
+</div>
+
+<div class="login-panel" id="loginPanel">
+    <form class="login-card" id="loginForm">
+        <h2>Sign in to Drive Agent</h2>
+        <label>Username</label>
+        <input id="username" autocomplete="username" required>
+        <label>Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <div class="login-error" id="loginError"></div>
+        <button class="send-btn" type="submit">Sign in</button>
+    </form>
 </div>
 
 <!-- Chat -->
@@ -240,7 +270,7 @@
         <p>Agent with 6-step Tool Registry pipeline</p>
         <div class="caps">
             <div class="cap">Google Drive</div>
-            <div class="cap">Code Sandbox</div>
+            <div class="cap">JWT Auth</div>
             <div class="cap">RAG Memory</div>
         </div>
     </div>
@@ -269,8 +299,84 @@
 </div>
 
 <script>
-const SESSION_ID = 'session-' + Date.now();
+const SESSION_STORAGE_KEY = 'drive-agent-access-token';
+const ACTOR_STORAGE_KEY = 'drive-agent-actor';
+const SESSION_ID_KEY = 'drive-agent-session-id';
+const SESSION_ID = sessionStorage.getItem(SESSION_ID_KEY) || crypto.randomUUID();
 const API = '';
+sessionStorage.setItem(SESSION_ID_KEY, SESSION_ID);
+
+function getToken() {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY);
+}
+
+function authHeaders() {
+    const token = getToken();
+    return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
+
+function showLogin(message = '') {
+    document.getElementById('loginPanel').style.display = 'flex';
+    document.getElementById('loginError').textContent = message;
+}
+
+function setActor(user) {
+    sessionStorage.setItem(ACTOR_STORAGE_KEY, JSON.stringify(user));
+    document.getElementById('actorLabel').textContent = user.username + ' (' + user.role + ')';
+    document.getElementById('loginPanel').style.display = 'none';
+}
+
+async function authenticatedFetch(path, options = {}) {
+    const headers = { ...authHeaders(), ...(options.headers || {}) };
+    const response = await fetch(API + path, { ...options, headers });
+    if (response.status === 401) {
+        logout('Your session has expired. Please sign in again.');
+        throw new Error('Authentication required');
+    }
+    return response;
+}
+
+async function restoreSession() {
+    const token = getToken();
+    if (!token) return showLogin();
+    try {
+        const response = await authenticatedFetch('/api/auth/me');
+        if (!response.ok) throw new Error('Could not restore session');
+        setActor(await response.json());
+    } catch (_) {
+        showLogin('Please sign in.');
+    }
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = document.getElementById('loginError');
+    error.textContent = '';
+    try {
+        const response = await fetch(API + '/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('username').value.trim(),
+                password: document.getElementById('password').value,
+            }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Login failed');
+        sessionStorage.setItem(SESSION_STORAGE_KEY, data.access_token);
+        setActor(data.user);
+        document.getElementById('password').value = '';
+    } catch (err) {
+        error.textContent = err.message;
+    }
+});
+
+function logout(message = '') {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(ACTOR_STORAGE_KEY);
+    document.getElementById('actorLabel').textContent = 'Not signed in';
+    showLogin(message);
+}
 
 function autoResize(el) {
     el.style.height = 'auto';
@@ -317,7 +423,7 @@ async function sendMessage() {
     const input = document.getElementById('input');
     const btn = document.getElementById('sendBtn');
     const message = input.value.trim();
-    if (!message) return;
+    if (!message || !getToken()) return;
 
     addMessage(message, 'user');
     input.value = '';
@@ -326,12 +432,13 @@ async function sendMessage() {
     setTyping(true);
 
     try {
-        const res = await fetch(API + '/api/chat', {
+        const res = await authenticatedFetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: SESSION_ID, message })
         });
         const data = await res.json();
+        if (!res.ok) throw new Error(data.response || data.detail || 'Chat request failed');
         addMessage(data.response, 'assistant', data.tools_used);
     } catch (err) {
         addMessage('Error: ' + err.message, 'assistant');
@@ -343,8 +450,9 @@ async function sendMessage() {
 }
 
 async function clearChat() {
+    if (!getToken()) return;
     try {
-        await fetch(API + '/api/clear', {
+        await authenticatedFetch('/api/clear', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: SESSION_ID })
@@ -358,7 +466,7 @@ async function clearChat() {
             <p>Agent with 6-step Tool Registry pipeline</p>
             <div class="caps">
                 <div class="cap">Google Drive</div>
-                <div class="cap">Code Sandbox</div>
+                <div class="cap">JWT Auth</div>
                 <div class="cap">RAG Memory</div>
             </div>
         </div>`;
@@ -369,8 +477,9 @@ async function toggleAudit() {
     panel.classList.toggle('open');
 
     if (panel.classList.contains('open')) {
+        if (!getToken()) return showLogin();
         try {
-            const res = await fetch(API + '/api/audit?session_id=' + SESSION_ID);
+            const res = await authenticatedFetch('/audit?session_id=' + encodeURIComponent(SESSION_ID));
             const data = await res.json();
             const body = document.getElementById('auditBody');
 
@@ -378,23 +487,14 @@ async function toggleAudit() {
                 body.textContent = 'No audit logs yet.';
                 return;
             }
-
-            body.innerHTML = data.audit_log.map(entry => `
-                <div class="audit-entry">
-                    <div><strong>${entry.tool}</strong>
-                        <span class="${entry.status === 'success' ? 'status-ok' : 'status-fail'}">
-                            [${entry.status}]
-                        </span>
-                    </div>
-                    <div>User: ${entry.user_id} (${entry.role}) | ${entry.timestamp.split('T')[1]?.split('.')[0] || ''}</div>
-                    <div>Args: ${JSON.stringify(entry.arguments).substring(0, 100)}</div>
-                </div>
-            `).join('');
+            body.textContent = JSON.stringify(data.audit_log, null, 2);
         } catch(e) {
             document.getElementById('auditBody').textContent = 'Error loading audit log.';
         }
     }
 }
+
+restoreSession();
 </script>
 </body>
 </html>

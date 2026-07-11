@@ -13,8 +13,12 @@ JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
 # LLM
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL") or "claude-sonnet-4-20250514"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL") or (
+    "gemini-2.5-flash" if LLM_PROVIDER == "gemini" else "claude-sonnet-4-20250514"
+)
+MAX_AGENT_TURNS = int(os.getenv("MAX_AGENT_TURNS", "8"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Embeddings

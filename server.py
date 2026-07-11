@@ -109,13 +109,8 @@ async def chat(
     try:
         user, token = auth
         agent = get_agent(req.session_id, user.user_id, token)
-        audit_before = len(agent.get_audit_log())
         response = agent.run(req.message)
-
-        new_logs = agent.get_audit_log()[audit_before:]
-        tools_used = [log["tool"] for log in new_logs]
-
-        return ChatResponse(response=response, tools_used=tools_used)
+        return ChatResponse(response=response, tools_used=agent.last_tools_used)
     except Exception as e:
         traceback.print_exc()
         return JSONResponse(

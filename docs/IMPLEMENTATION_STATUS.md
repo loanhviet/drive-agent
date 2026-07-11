@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: Milestone 6 is complete and awaiting review/commit.
+Last updated: Milestone 7 is complete and awaiting review/commit.
 
 ## Completed commits
 
@@ -11,6 +11,7 @@ dfbea8a feat: add tool registry pipeline
 d93c331 feat: add file reader
 169b798 feat: add google drive tools
 4b9ca97 feat: add qdrant memory
+02983d8 feat: add memory tools
 ```
 
 ## Completed work
@@ -30,11 +31,14 @@ d93c331 feat: add file reader
 - Collection names are namespaced by embedding provider/model/dimension to prevent mixing incompatible vectors.
 - `save_memory` now stores short facts as one vector and documents as chunks, with user-scoped content-hash deduplication.
 - `search_memory` performs semantic search only within the authenticated user's memory and returns `insufficient_data` when no result meets the score threshold.
-- Last full successful checks: 76 tests passed; Ruff and compile passed.
+- Agent now supports Gemini (default) and Anthropic through a provider-neutral tool-use interface.
+- The UI has JWT login, user/role display, session restoration, authenticated chat/audit calls, and safe audit rendering.
+- Offline agent integration tests cover list/download/read/save/search across a new agent session.
+- Last full successful checks: 87 tests passed; agent/provider/server coverage 91%; Ruff and compile passed.
 
 ## Current worktree changes (not committed)
 
-Milestone 6 is implemented and ready for review:
+Milestone 7 is implemented and ready for review:
 
 ```text
 list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
@@ -42,14 +46,15 @@ list_drive_files -> get_drive_file(file_id) -> read_file_tool(artifact_id)
 
 Implemented changes:
 
-- Added Qdrant content-hash lookup for deduplication.
-- Replaced memory TODOs with fact/document save and semantic search tools.
-- `document_ref` is consumed only after successful document storage.
+- Added `services/llm.py` with Gemini, Anthropic, and scripted test providers.
+- Replaced Claude-only Agent implementation with a bounded generic tool loop.
+- Chat API returns tools used directly from Agent, rather than relying on audit log ordering.
+- Static UI now authenticates through `/api/auth/login` and calls protected routes with a Bearer token.
 
 ## Required next steps
 
-1. Review and commit Milestone 6. Proposed simple commit: `feat: add memory tools`.
-2. Start Milestone 7: add Gemini/Anthropic chat providers, login UI, and agent integration tests.
+1. Review and commit Milestone 7. Proposed simple commit: `feat: integrate agent ui`.
+2. Start Milestone 8: Docker Compose, CI, README portfolio documentation, and final demo instructions.
 3. Keep live providers opt-in; do not use or fabricate API keys or Google credentials.
 
 ## Important constraints

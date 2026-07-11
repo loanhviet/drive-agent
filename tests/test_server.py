@@ -1,8 +1,9 @@
-import agent as agent_module
 import pytest
 from registry.models import ToolDefinition
 from registry.registry import ToolRegistry
 from services.audit import get_audit_store
+import services.llm as llm_module
+import server
 
 
 @pytest.mark.anyio
@@ -57,7 +58,7 @@ async def test_clear_only_requires_session_id(client, admin_token):
 async def test_chat_returns_structured_error_without_llm_api_key(
     client, monkeypatch, admin_token
 ):
-    monkeypatch.setattr(agent_module, "ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr(llm_module, "GEMINI_API_KEY", "")
 
     response = await client.post(
         "/api/chat",
@@ -67,7 +68,7 @@ async def test_chat_returns_structured_error_without_llm_api_key(
 
     assert response.status_code == 500
     assert response.json()["tools_used"] == []
-    assert "ANTHROPIC_API_KEY" in response.json()["response"]
+    assert "GEMINI_API_KEY" in response.json()["response"]
 
 
 @pytest.mark.anyio
@@ -98,6 +99,29 @@ async def test_login_rejects_wrong_password(client):
     )
 
     assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_chat_returns_tools_used_from_agent(client, monkeypatch, admin_token):
+    class FakeAgent:
+        last_tools_used = ["list_drive_files", "get_drive_file"]
+
+        def run(self, _message):
+            return "I found the requested file."
+
+    monkeypatch.setattr(server, "get_agent", lambda *_args: FakeAgent())
+
+    response = await client.post(
+        "/api/chat",
+        json={"session_id": "tools-test", "message": "List files"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "response": "I found the requested file.",
+        "tools_used": ["list_drive_files", "get_drive_file"],
+    }
 
 
 @pytest.mark.anyio
