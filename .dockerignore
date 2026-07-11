@@ -1,0 +1,16 @@
+.git/
+.venv/
+.env
+credentials.json
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.pyc
+docs/
+tests/

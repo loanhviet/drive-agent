@@ -1,0 +1,23 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  app:
+    build: .
+    ports:
+      - "9004:9004"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      QDRANT_MODE: server
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    depends_on:
+      - qdrant
+
+volumes:
+  qdrant_data:
