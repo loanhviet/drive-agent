@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from config import ANTHROPIC_API_KEY, GEMINI_API_KEY, LLM_MODEL, LLM_PROVIDER
+from config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, LLM_MODEL, LLM_PROVIDER
 
 
 class LLMError(RuntimeError):
@@ -34,6 +34,26 @@ class LLMProvider(Protocol):
         tools: list[dict[str, Any]],
         history: list[dict[str, Any]],
     ) -> ProviderResponse: ...
+
+
+def sanitize_function_parameters(input_schema: dict[str, Any]) -> dict[str, Any]:
+    """Keep the portable JSON Schema subset used by hosted tool APIs.
+
+    The registry retains the original schema for strict server-side validation.
+    """
+
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: sanitize(item)
+                for key, item in value.items()
+                if key not in {"additionalProperties", "anyOf"}
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    return sanitize(deepcopy(input_schema))
 
 
 class AnthropicProvider:
@@ -120,7 +140,7 @@ class GeminiProvider:
             types.FunctionDeclaration(
                 name=tool["name"],
                 description=tool["description"],
-                parameters=self._function_parameters(tool["input_schema"]),
+                parameters=sanitize_function_parameters(tool["input_schema"]),
             )
             for tool in tools
         ]
@@ -144,29 +164,6 @@ class GeminiProvider:
             if getattr(part, "function_call", None)
         ]
         return ProviderResponse(text=text, tool_calls=calls)
-
-    @staticmethod
-    def _function_parameters(input_schema: dict[str, Any]) -> dict[str, Any]:
-        """Convert registry JSON Schema to the subset accepted by Gemini tools.
-
-        ``additionalProperties`` and ``anyOf`` are useful for strict local
-        validation, but the Gemini SDK rejects them in
-        ``FunctionDeclaration.parameters``. Work on a copy so the registry
-        continues enforcing the original schema.
-        """
-
-        def sanitize(value: Any) -> Any:
-            if isinstance(value, dict):
-                return {
-                    key: sanitize(item)
-                    for key, item in value.items()
-                    if key not in {"additionalProperties", "anyOf"}
-                }
-            if isinstance(value, list):
-                return [sanitize(item) for item in value]
-            return value
-
-        return sanitize(deepcopy(input_schema))
 
     @staticmethod
     def _contents(history: list[dict[str, Any]]) -> list[Any]:
@@ -204,6 +201,86 @@ class GeminiProvider:
         return contents
 
 
+class GroqProvider:
+    """Groq adapter using its OpenAI-compatible chat-completions endpoint."""
+
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        api_key = GROQ_API_KEY if api_key is None else api_key
+        model = LLM_MODEL if model is None else model
+        if not api_key:
+            raise LLMError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+        from openai import OpenAI
+
+        self.client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        self.model = model
+
+    def complete(self, *, system_prompt, tools, history) -> ProviderResponse:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=self._messages(system_prompt, history),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": sanitize_function_parameters(tool["input_schema"]),
+                    },
+                }
+                for tool in tools
+            ],
+            tool_choice="auto",
+        )
+        if not response.choices:
+            raise LLMError("Groq returned no choices")
+        message = response.choices[0].message
+        calls = []
+        for call in message.tool_calls or []:
+            try:
+                arguments = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError as error:
+                raise LLMError(f"Groq returned invalid tool arguments for {call.function.name}") from error
+            if not isinstance(arguments, dict):
+                raise LLMError(f"Groq returned non-object tool arguments for {call.function.name}")
+            calls.append(ToolCall(id=call.id, name=call.function.name, arguments=arguments))
+        return ProviderResponse(text=message.content or "", tool_calls=calls)
+
+    @staticmethod
+    def _messages(system_prompt: str, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        for message in history:
+            if message["role"] == "user":
+                messages.append({"role": "user", "content": message["text"]})
+            elif message["role"] == "assistant":
+                assistant_message: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": message.get("text") or None,
+                }
+                if message.get("tool_calls"):
+                    assistant_message["tool_calls"] = [
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                            },
+                        }
+                        for call in message["tool_calls"]
+                    ]
+                messages.append(assistant_message)
+            elif message["role"] == "tool":
+                messages.extend(
+                    {
+                        "role": "tool",
+                        "tool_call_id": result["tool_call_id"],
+                        "content": json.dumps(result["result"], ensure_ascii=False),
+                    }
+                    for result in message["results"]
+                )
+        return messages
+
+
 class ScriptedProvider:
     """Offline provider used by deterministic integration tests."""
 
@@ -230,4 +307,6 @@ def create_llm_provider(provider_name: str | None = None) -> LLMProvider:
         return GeminiProvider()
     if provider_name == "anthropic":
         return AnthropicProvider()
+    if provider_name == "groq":
+        return GroqProvider()
     raise LLMError(f"Unsupported LLM_PROVIDER: {provider_name}")

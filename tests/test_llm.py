@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.llm import AnthropicProvider, GeminiProvider, LLMError, ToolCall
+from services.llm import AnthropicProvider, GeminiProvider, GroqProvider, LLMError, ToolCall
 
 
 def history_with_tool_result():
@@ -104,9 +104,43 @@ def test_gemini_adapter_removes_unsupported_additional_properties(monkeypatch):
     assert schema["anyOf"] == [{"required": ["options"]}]
 
 
+def test_groq_adapter_serializes_history_and_parses_tool_call(monkeypatch):
+    provider = GroqProvider(api_key="fake-key", model="qwen-test")
+    tool_call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="get_drive_file", arguments='{"file_id": "id"}'),
+    )
+    message = SimpleNamespace(content="", tool_calls=[tool_call])
+    fake_response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return fake_response
+
+    monkeypatch.setattr(provider.client.chat.completions, "create", fake_create)
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+
+    response = provider.complete(
+        system_prompt="test",
+        tools=[{"name": "get_drive_file", "description": "download", "input_schema": schema}],
+        history=history_with_tool_result(),
+    )
+
+    assert response.tool_calls == [ToolCall("call-1", "get_drive_file", {"file_id": "id"})]
+    assert captured["messages"][0] == {"role": "system", "content": "test"}
+    assert captured["messages"][2]["tool_calls"][0]["function"]["name"] == "get_drive_file"
+    assert captured["messages"][3]["role"] == "tool"
+    assert "additionalProperties" not in captured["tools"][0]["function"]["parameters"]
+
+
 @pytest.mark.parametrize(
     ("provider", "message"),
-    [(GeminiProvider, "GEMINI_API_KEY"), (AnthropicProvider, "ANTHROPIC_API_KEY")],
+    [
+        (GeminiProvider, "GEMINI_API_KEY"),
+        (AnthropicProvider, "ANTHROPIC_API_KEY"),
+        (GroqProvider, "GROQ_API_KEY"),
+    ],
 )
 def test_provider_requires_key(provider, message):
     with pytest.raises(LLMError, match=message):

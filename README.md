@@ -5,7 +5,7 @@ Drive Agent is a Python AI-agent project that demonstrates secure tool calling, 
 ## What it demonstrates
 
 - A six-step Tool Registry: schema validation, authentication, scopes, rate limit, audit, and execution.
-- Gemini tool calling by default, with an Anthropic adapter retained for source-template compatibility.
+- Gemini tool calling by default, with Groq and Anthropic adapters.
 - Google Drive list/download/read flow using short-lived, user-scoped artifacts.
 - MarkItDown conversion for common document formats.
 - Fact/preference memory and chunked document RAG memory in Qdrant.
@@ -50,6 +50,7 @@ For a real chat/RAG run, add a Gemini key in `.env`:
 LLM_PROVIDER=gemini
 LLM_MODEL=gemini-2.5-flash
 GEMINI_API_KEY=your_key_here
+GROQ_API_KEY=
 EMBEDDING_PROVIDER=gemini
 EMBEDDING_MODEL=gemini-embedding-001
 EMBEDDING_DIM=768
@@ -111,7 +112,7 @@ Copy `.env.example`; do not commit `.env`.
 | Group | Important variables |
 | --- | --- |
 | App | `APP_DB_PATH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES` |
-| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` |
+| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
 | Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `OPENAI_API_KEY` |
 | Qdrant | `QDRANT_MODE`, `QDRANT_PATH`, `QDRANT_URL`, `QDRANT_HOST`, `QDRANT_PORT` |
 | Drive | `GOOGLE_SERVICE_ACCOUNT_FILE`, `GOOGLE_DRIVE_FOLDER_ID` |
