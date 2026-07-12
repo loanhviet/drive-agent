@@ -74,7 +74,7 @@ To use Qdrant in Docker:
 docker compose up --build
 ```
 
-Compose overrides Qdrant connection settings for the application. For a live Drive demo, mount `credentials.json` into the container yourself and set `GOOGLE_SERVICE_ACCOUNT_FILE` to its container path; credentials are never included in this repository.
+Compose overrides Qdrant connection settings for the application and mounts a root-level `credentials.json` into the app container as read-only. At startup, the entrypoint provides a private runtime copy to the unprivileged app user, so restrictive host-file permissions work without changing the secret file mode. Named Docker volumes persist both Qdrant data and the app's SQLite users, chat history, and audit logs across `docker compose down` / `up` cycles. Do not use `docker compose down -v` unless you intentionally want to remove that data. `credentials.json` is never copied into the image or tracked by Git.
 
 To validate the Compose file without creating a local `.env`, run:
 
@@ -98,12 +98,20 @@ ENV_FILE=.env.example docker compose config
 | --- | --- |
 | `POST /api/auth/login` | Exchange local username/password for a JWT. |
 | `GET /api/auth/me` | Inspect the current actor. |
-| `POST /api/chat` | Send an authenticated chat message. |
+| `POST /api/chat` | Send an authenticated chat message and receive one JSON response. |
+| `POST /api/chat/stream` | Send an authenticated message and receive SSE progress events followed by the final response. |
+| `GET /api/chat/history` | Load the authenticated user's saved messages for a session. |
 | `POST /api/clear` | Clear an authenticated conversation history. |
 | `GET /audit` | Get persistent tool audit logs. |
 | `GET /api/health` | Health check without external-service calls. |
 
 Admin has Drive read plus memory read/write. User has Drive read and memory read only. Audit logs are scoped to the requesting user unless the requester is an admin.
+
+## Chat progress and history
+
+The UI sends chat requests to `/api/chat/stream` using `fetch`, so the JWT Authorization header remains available while the response is streamed. The endpoint emits `status` events for agent/tool progress, then a `final` event containing the completed response and tools used. It emits an `error` event if a turn fails.
+
+Completed user/assistant turns are stored in SQLite per user and browser session ID. Reloading the page restores the visible history; a recreated agent uses the latest 40 messages as LLM context. The Clear button only clears the current screen, so no saved conversation is deleted.
 
 ## Configuration
 

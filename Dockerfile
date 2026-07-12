@@ -12,10 +12,11 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
-RUN mkdir -p /app/.data && chown -R appuser:appuser /app
-
-USER appuser
+RUN mkdir -p /app/.data \
+    && chown -R appuser:appuser /app \
+    && chmod 755 /app/docker-entrypoint.sh
 
 EXPOSE 9004
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9004"]

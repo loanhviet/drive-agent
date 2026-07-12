@@ -16,8 +16,13 @@ services:
       QDRANT_MODE: server
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
     depends_on:
       - qdrant
+    volumes:
+      - app_data:/app/.data
+      - ./credentials.json:/run/secrets/google-service-account.json:ro
 
 volumes:
   qdrant_data:
+  app_data:
