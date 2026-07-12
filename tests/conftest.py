@@ -4,8 +4,10 @@ from httpx import ASGITransport, AsyncClient
 import server
 import services.audit as audit_module
 import services.auth as auth_module
+import services.chat as chat_module
 from services.audit import AuditStore
 from services.auth import AuthService
+from services.chat import ChatStore
 
 
 @pytest.fixture
@@ -24,13 +26,18 @@ def isolated_services(tmp_path):
     auth_service.create_user("admin-id", "admin", "admin-password", "admin")
     auth_service.create_user("user-id", "user", "user-password", "user")
     audit_store = AuditStore(str(database))
+    chat_store = ChatStore(str(database))
     auth_module._auth_service = auth_service
     audit_module._audit_store = audit_store
+    chat_module._chat_store = chat_store
     server.sessions.clear()
-    yield {"auth": auth_service, "audit": audit_store}
+    server.active_sessions.clear()
+    yield {"auth": auth_service, "audit": audit_store, "chat": chat_store}
     server.sessions.clear()
+    server.active_sessions.clear()
     auth_module._auth_service = None
     audit_module._audit_store = None
+    chat_module._chat_store = None
 
 
 @pytest.fixture

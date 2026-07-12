@@ -58,6 +58,7 @@ async def test_clear_only_requires_session_id(client, admin_token):
 async def test_chat_returns_structured_error_without_llm_api_key(
     client, monkeypatch, admin_token
 ):
+    monkeypatch.setattr(llm_module, "LLM_PROVIDER", "gemini")
     monkeypatch.setattr(llm_module, "GEMINI_API_KEY", "")
 
     response = await client.post(
@@ -102,6 +103,21 @@ async def test_login_rejects_wrong_password(client):
 
 
 @pytest.mark.anyio
+async def test_chat_sessions_can_be_created_listed_and_deleted(client, admin_token):
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    created = await client.post("/api/chat/sessions", headers=headers)
+
+    assert created.status_code == 200
+    session = created.json()
+    listed = await client.get("/api/chat/sessions", headers=headers)
+    assert [item["session_id"] for item in listed.json()["sessions"]] == [session["session_id"]]
+
+    deleted = await client.delete(f"/api/chat/sessions/{session['session_id']}", headers=headers)
+    assert deleted.status_code == 200
+    assert (await client.get("/api/chat/sessions", headers=headers)).json() == {"sessions": []}
+
+
+@pytest.mark.anyio
 async def test_chat_returns_tools_used_from_agent(client, monkeypatch, admin_token):
     class FakeAgent:
         last_tools_used = ["list_drive_files", "get_drive_file"]
@@ -122,6 +138,42 @@ async def test_chat_returns_tools_used_from_agent(client, monkeypatch, admin_tok
         "response": "I found the requested file.",
         "tools_used": ["list_drive_files", "get_drive_file"],
     }
+
+
+@pytest.mark.anyio
+async def test_stream_chat_persists_successful_turn_and_emits_progress(
+    client, monkeypatch, admin_token
+):
+    class FakeAgent:
+        last_tools_used = ["search_memory"]
+        conversation_history = []
+
+        def run(self, message, *, on_status=None):
+            self.conversation_history.extend(
+                [{"role": "user", "text": message}, {"role": "assistant", "text": "Saved answer"}]
+            )
+            on_status({"stage": "thinking"})
+            on_status({"stage": "tool_started", "tool": "search_memory"})
+            on_status({"stage": "tool_finished", "tool": "search_memory"})
+            return "Saved answer"
+
+    monkeypatch.setattr(server, "get_agent", lambda *_args: FakeAgent())
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    response = await client.post(
+        "/api/chat/stream",
+        json={"session_id": "stream-test", "message": "Find memory"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert "event: status" in response.text
+    assert '"stage": "tool_started"' in response.text
+    assert "event: final" in response.text
+    history = await client.get("/api/chat/history?session_id=stream-test", headers=headers)
+    assert [message["content"] for message in history.json()["messages"]] == [
+        "Find memory",
+        "Saved answer",
+    ]
 
 
 @pytest.mark.anyio

@@ -69,12 +69,19 @@ def test_agent_runs_tool_loop_and_returns_final_text(tmp_path):
         tools=[echo_tool],
     )
 
-    answer = agent.run("Please echo hello")
+    statuses = []
+    answer = agent.run("Please echo hello", on_status=statuses.append)
 
     assert answer == "Tool completed."
     assert agent.last_tools_used == ["echo"]
     assert provider.calls[1]["history"][-1]["results"][0]["result"]["result"] == {"echo": "hello"}
     assert agent.get_audit_log()[0]["tool"] == "echo"
+    assert statuses == [
+        {"stage": "thinking"},
+        {"stage": "tool_started", "tool": "echo"},
+        {"stage": "tool_finished", "tool": "echo"},
+        {"stage": "thinking"},
+    ]
 
 
 def test_agent_stops_infinite_tool_loop(tmp_path):
@@ -99,6 +106,34 @@ def test_agent_stops_infinite_tool_loop(tmp_path):
 
     with pytest.raises(RuntimeError, match="maximum of 2"):
         agent.run("loop")
+    assert agent.conversation_history == []
+
+
+def test_agent_directly_handles_explicit_vietnamese_drive_listing(tmp_path):
+    from registry.models import ToolDefinition
+
+    list_tool = ToolDefinition(
+        name="list_drive_files",
+        description="List files.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        required_scopes=["drive:read"],
+        handler=lambda: {
+            "total_files": 1,
+            "files": [{"name": "report.pdf", "mimeType": "application/pdf"}],
+        },
+    )
+    agent = Agent(
+        "token",
+        provider=ScriptedProvider([]),
+        registry=make_registry(tmp_path),
+        tools=[list_tool],
+    )
+
+    response = agent.run("liệt kê các file trong drive")
+
+    assert "Đã tìm thấy 1 file" in response
+    assert "report.pdf" in response
+    assert agent.last_tools_used == ["list_drive_files"]
 
 
 def test_unknown_provider_is_rejected():
