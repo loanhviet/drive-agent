@@ -22,7 +22,9 @@ _DEFAULT_LLM_MODELS = {
     "groq": "qwen/qwen3-32b",
 }
 LLM_MODEL = os.getenv("LLM_MODEL") or _DEFAULT_LLM_MODELS.get(LLM_PROVIDER, "")
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 MAX_AGENT_TURNS = int(os.getenv("MAX_AGENT_TURNS", "8"))
+AGENT_CONTEXT_MAX_CHARS = int(os.getenv("AGENT_CONTEXT_MAX_CHARS", "30000"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Embeddings
@@ -30,6 +32,7 @@ EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "gemini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "gemini-embedding-001"
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 
 # Qdrant
 QDRANT_MODE = os.getenv("QDRANT_MODE", "local")
@@ -44,6 +47,7 @@ MEMORY_COLLECTION = os.getenv("MEMORY_COLLECTION", "agent_memory")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 MEMORY_SCORE_THRESHOLD = float(os.getenv("MEMORY_SCORE_THRESHOLD", "0.3"))
+FILE_PREVIEW_CHARS = int(os.getenv("FILE_PREVIEW_CHARS", "6000"))
 
 # Google Drive
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")

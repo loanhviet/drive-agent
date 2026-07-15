@@ -4,6 +4,7 @@ Read File Tool - Read and convert files to Markdown using MarkItDown.
 
 from registry.models import ToolDefinition
 from registry.context import get_current_actor
+from config import FILE_PREVIEW_CHARS
 from services.artifacts import get_artifact_store
 from services.documents import get_document_cache
 from services.file_reader import read_file
@@ -26,7 +27,9 @@ def read_file_tool(artifact_id: str) -> dict:
             "source_type": "drive_file",
         },
     )
-    preview = full_result["content"][:15000]
+    if FILE_PREVIEW_CHARS < 1:
+        raise ValueError("FILE_PREVIEW_CHARS must be positive")
+    preview = full_result["content"][:FILE_PREVIEW_CHARS]
     return {
         **artifact.metadata,
         "document_ref": document.document_ref,

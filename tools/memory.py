@@ -8,10 +8,19 @@ from registry.context import get_current_actor
 from registry.models import ToolDefinition
 from config import MEMORY_SCORE_THRESHOLD
 from services import embedding, vectorstore
-from services.chunking import split_text
+from services.chunking import DocumentChunk, chunk_document
 from services.documents import get_document_cache
 
 MAX_TOP_K = 10
+PUBLIC_METADATA_KEYS = (
+    "source_type",
+    "source_name",
+    "file_id",
+    "category",
+    "chunk_index",
+    "chunk_count",
+    "section",
+)
 
 
 def _content_hash(content: str) -> str:
@@ -73,15 +82,52 @@ def save_memory(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "user_id": user_id,
     }
-    chunks = split_text(raw_content) if is_document else [raw_content]
+    chunks = (
+        chunk_document(raw_content)
+        if is_document
+        else [
+            DocumentChunk(
+                text=raw_content,
+                chunk_index=0,
+                start_char=0,
+                end_char=len(raw_content),
+                section="",
+            )
+        ]
+    )
     if not chunks:
         raise ValueError("Memory content has no text to save")
 
-    vectors = embedding.embed_texts(chunks)
+    embedding_inputs = []
+    for chunk in chunks:
+        context = []
+        if metadata["source_name"]:
+            context.append(f"Source: {metadata['source_name']}")
+        if chunk.section:
+            context.append(f"Section: {chunk.section}")
+        context.append(chunk.text)
+        embedding_inputs.append("\n".join(context))
+
+    vectors = embedding.embed_texts(embedding_inputs)
     if len(vectors) != len(chunks):
         raise RuntimeError("Embedding provider returned incomplete document vectors")
-    for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
-        vectorstore.save_memory(chunk, vector, {**metadata, "chunk_index": index})
+    vectorstore.save_memories(
+        [
+            (
+                chunk.text,
+                vector,
+                {
+                    **metadata,
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_count": len(chunks),
+                    "start_char": chunk.start_char,
+                    "end_char": chunk.end_char,
+                    "section": chunk.section,
+                },
+            )
+            for chunk, vector in zip(chunks, vectors, strict=True)
+        ]
+    )
 
     if document_ref:
         get_document_cache().discard(document_ref, user_id)
@@ -94,23 +140,54 @@ def save_memory(
     }
 
 
-def search_memory(query: str, top_k: int = 5) -> dict:
+def search_memory(
+    query: str,
+    top_k: int = 5,
+    memory_type: str = "all",
+    source_name: str = "",
+) -> dict:
     """Search only the authenticated user's long-term semantic memory."""
     if not query or not query.strip():
         raise ValueError("query must not be empty")
     if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= MAX_TOP_K:
         raise ValueError(f"top_k must be an integer between 1 and {MAX_TOP_K}")
+    allowed_memory_types = {"all", "fact", "document", "task"}
+    if memory_type not in allowed_memory_types:
+        raise ValueError(
+            f"memory_type must be one of: {', '.join(sorted(allowed_memory_types))}"
+        )
 
     actor = get_current_actor()
     memories = vectorstore.search_memory(
         embedding.embed_query(query.strip()),
         top_k=top_k,
         user_id=actor["user_id"],
+        memory_type=memory_type,
+        source_name=source_name.strip() or None,
+        score_threshold=MEMORY_SCORE_THRESHOLD,
     )
-    memories = [memory for memory in memories if memory["score"] >= MEMORY_SCORE_THRESHOLD]
+    for memory in memories:
+        metadata = {
+            key: memory["metadata"].get(key)
+            for key in PUBLIC_METADATA_KEYS
+            if key in memory["metadata"]
+        }
+        memory["metadata"] = metadata
+        memory["citation"] = {
+            "source_name": metadata.get("source_name", ""),
+            "file_id": metadata.get("file_id", ""),
+            "section": metadata.get("section", ""),
+            "chunk_index": metadata.get("chunk_index", 0),
+        }
     return {
         "status": "found" if memories else "insufficient_data",
         "query": query,
+        "memory_type": memory_type,
+        "answer_policy": (
+            "Use only claims explicitly present in the returned memory text. "
+            "Do not add related background knowledge; omit any unsupported claim. "
+            "Cite source_name and section/chunk_index without inventing a file URL."
+        ),
         "results_count": len(memories),
         "memories": memories,
     }
@@ -148,7 +225,8 @@ search_memory_tool = ToolDefinition(
     name="search_memory",
     description=(
         "Search the authenticated user's long-term memory for previously saved preferences, facts, "
-        "or document knowledge. Use this before answering questions about prior interactions or saved files."
+        "or document knowledge. Use memory_type=fact for preferences and memory_type=document "
+        "for saved files. Optionally filter by natural source-name keywords."
     ),
     input_schema={
         "type": "object",
@@ -159,6 +237,15 @@ search_memory_tool = ToolDefinition(
                 "minimum": 1,
                 "maximum": MAX_TOP_K,
                 "description": "Number of results to return (default: 5).",
+            },
+            "memory_type": {
+                "type": "string",
+                "enum": ["all", "fact", "document", "task"],
+                "description": "Memory kind to search (default: all).",
+            },
+            "source_name": {
+                "type": "string",
+                "description": "Optional natural-language source name or distinctive keywords.",
             },
         },
         "required": ["query"],

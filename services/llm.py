@@ -6,7 +6,14 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, LLM_MODEL, LLM_PROVIDER
+from config import (
+    ANTHROPIC_API_KEY,
+    GEMINI_API_KEY,
+    GROQ_API_KEY,
+    LLM_MODEL,
+    LLM_PROVIDER,
+    LLM_TEMPERATURE,
+)
 
 
 class LLMError(RuntimeError):
@@ -71,6 +78,7 @@ class AnthropicProvider:
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2048,
+            temperature=LLM_TEMPERATURE,
             system=system_prompt,
             tools=tools,
             messages=self._messages(history),
@@ -150,6 +158,7 @@ class GeminiProvider:
             config=types.GenerateContentConfig(
                 systemInstruction=system_prompt,
                 tools=[types.Tool(functionDeclarations=declarations)],
+                temperature=LLM_TEMPERATURE,
             ),
         )
         parts = response.candidates[0].content.parts if response.candidates else []
@@ -230,6 +239,7 @@ class GroqProvider:
                 for tool in tools
             ],
             tool_choice="auto",
+            temperature=LLM_TEMPERATURE,
         )
         if not response.choices:
             raise LLMError("Groq returned no choices")

@@ -4,6 +4,7 @@ from qdrant_client import QdrantClient
 from registry.context import execution_context
 from registry.registry import ToolRegistry
 from services.documents import DocumentCache, DocumentReferenceError
+from services.chunking import DocumentChunk
 from services.embedding import set_embedding_provider_for_testing
 from services.vectorstore import VectorStore, set_vector_store_for_testing
 from tools import memory
@@ -86,8 +87,12 @@ def test_document_memory_chunks_and_retrieves_middle_concept(monkeypatch, memory
     )
     monkeypatch.setattr(
         memory,
-        "split_text",
-        lambda _content: ["introduction", "QUANTUM_MIDDLE_CONCEPT details", "conclusion"],
+        "chunk_document",
+        lambda _content: [
+            DocumentChunk("introduction", 0, 0, 12, "Introduction"),
+            DocumentChunk("QUANTUM_MIDDLE_CONCEPT details", 1, 13, 43, "Results"),
+            DocumentChunk("conclusion", 2, 44, 54, "Conclusion"),
+        ],
     )
 
     with execution_context(actor()):
@@ -96,9 +101,19 @@ def test_document_memory_chunks_and_retrieves_middle_concept(monkeypatch, memory
 
     assert saved["status"] == "saved"
     assert saved["chunks_saved"] == 3
+    document_embedding_call = memory_environment["provider"].calls[0]
+    assert document_embedding_call[1] == "RETRIEVAL_DOCUMENT"
+    assert "Source: notes.txt\nSection: Results\nQUANTUM_MIDDLE_CONCEPT" in document_embedding_call[0][1]
     assert found["status"] == "found"
     assert found["memories"][0]["text"] == "QUANTUM_MIDDLE_CONCEPT details"
     assert found["memories"][0]["metadata"]["file_id"] == "drive-file"
+    assert found["memories"][0]["metadata"]["chunk_count"] == 3
+    assert found["memories"][0]["citation"] == {
+        "source_name": "notes.txt",
+        "file_id": "drive-file",
+        "section": "Results",
+        "chunk_index": 1,
+    }
     with pytest.raises(DocumentReferenceError):
         documents.get(document.document_ref, "user-1")
 
@@ -113,7 +128,14 @@ def test_document_reference_cannot_be_saved_by_another_user(memory_environment):
 
 
 def test_long_direct_content_is_stored_as_document(monkeypatch, memory_environment):
-    monkeypatch.setattr(memory, "split_text", lambda _content: ["part one", "part two"])
+    monkeypatch.setattr(
+        memory,
+        "chunk_document",
+        lambda _content: [
+            DocumentChunk("part one", 0, 0, 8, ""),
+            DocumentChunk("part two", 1, 9, 17, ""),
+        ],
+    )
 
     with execution_context(actor()):
         saved = memory.save_memory(content="x" * 1201)
@@ -130,8 +152,36 @@ def test_search_reports_insufficient_data(memory_environment):
     assert result == {
         "status": "insufficient_data",
         "query": "Nothing has been saved",
+        "memory_type": "all",
+        "answer_policy": (
+            "Use only claims explicitly present in the returned memory text. "
+            "Do not add related background knowledge; omit any unsupported claim. "
+            "Cite source_name and section/chunk_index without inventing a file URL."
+        ),
         "results_count": 0,
         "memories": [],
+    }
+
+
+def test_search_filters_memory_type_and_source(memory_environment):
+    with execution_context(actor()):
+        memory.save_memory(content="Tôi thích Python", category="user_preference")
+        memory.save_memory(
+            content="Python document details " * 80,
+            source_type="document",
+            source_name="python-notes.txt",
+        )
+        found = memory.search_memory(
+            "Python",
+            memory_type="document",
+            source_name="python-notes.txt",
+        )
+
+    assert found["status"] == "found"
+    assert found["memory_type"] == "document"
+    assert {item["metadata"]["source_type"] for item in found["memories"]} == {"document"}
+    assert {item["citation"]["source_name"] for item in found["memories"]} == {
+        "python-notes.txt"
     }
 
 
@@ -140,6 +190,12 @@ def test_search_validates_top_k(memory_environment, top_k):
     with execution_context(actor()):
         with pytest.raises(ValueError, match="top_k"):
             memory.search_memory("Python", top_k=top_k)
+
+
+def test_search_validates_memory_type(memory_environment):
+    with execution_context(actor()):
+        with pytest.raises(ValueError, match="memory_type"):
+            memory.search_memory("Python", memory_type="unknown")
 
 
 def test_registry_blocks_memory_write_for_read_only_user(memory_environment):

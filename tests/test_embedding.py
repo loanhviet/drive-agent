@@ -44,6 +44,26 @@ def test_document_embeddings_are_batched():
     assert provider.calls == [(["first", "second"], "RETRIEVAL_DOCUMENT")]
 
 
+def test_document_embeddings_use_bounded_batches_in_order():
+    provider = FakeProvider()
+    embedding.set_embedding_provider_for_testing(provider)
+    texts = [f"part-{index}" for index in range(34)]
+
+    vectors = embedding.embed_texts(texts, batch_size=16)
+
+    assert [len(call[0]) for call in provider.calls] == [16, 16, 2]
+    assert [text for call in provider.calls for text in call[0]] == texts
+    assert len(vectors) == len(texts)
+
+
+@pytest.mark.parametrize("batch_size", [0, -1, True])
+def test_document_embedding_validates_batch_size(batch_size):
+    embedding.set_embedding_provider_for_testing(FakeProvider())
+
+    with pytest.raises(EmbeddingError, match="batch_size"):
+        embedding.embed_texts(["content"], batch_size=batch_size)
+
+
 def test_query_embedding_uses_cache():
     provider = FakeProvider()
     embedding.set_embedding_provider_for_testing(provider)

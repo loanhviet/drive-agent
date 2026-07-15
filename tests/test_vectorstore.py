@@ -32,6 +32,91 @@ def test_upsert_and_search_memory_with_user_filter(tmp_path):
     assert results[0]["score"] > 0.99
 
 
+def test_batch_upsert_writes_all_records_in_one_request(monkeypatch, tmp_path):
+    store = make_store(tmp_path)
+    store.ensure_collection()
+    calls = []
+    original_upsert = store.client.upsert
+
+    def capture_upsert(**kwargs):
+        calls.append(kwargs)
+        return original_upsert(**kwargs)
+
+    monkeypatch.setattr(store.client, "upsert", capture_upsert)
+
+    saved = store.save_memories(
+        [
+            ("first", [1.0, 0.0, 0.0], {"memory_id": "memory", "chunk_index": 0}),
+            ("second", [0.0, 1.0, 0.0], {"memory_id": "memory", "chunk_index": 1}),
+        ]
+    )
+
+    assert len(saved) == 2
+    assert len(calls) == 1
+    assert len(calls[0]["points"]) == 2
+
+
+def test_search_filters_memory_type_and_exact_source(tmp_path):
+    store = make_store(tmp_path)
+    store.save_memories(
+        [
+            (
+                "Python preference",
+                [1.0, 0.0, 0.0],
+                {"user_id": "user-1", "source_type": "fact", "source_name": ""},
+            ),
+            (
+                "Python document",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "source_type": "drive_file",
+                    "source_name": "notes.txt",
+                },
+            ),
+            (
+                "Other document",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "source_type": "document",
+                    "source_name": "other.txt",
+                },
+            ),
+        ]
+    )
+
+    results = store.search_memory(
+        [1.0, 0.0, 0.0],
+        user_id="user-1",
+        memory_type="document",
+        source_name="tài liệu NOTES",
+    )
+
+    assert [item["text"] for item in results] == ["Python document"]
+
+
+def test_batch_upsert_validates_every_record_before_writing(monkeypatch, tmp_path):
+    store = make_store(tmp_path)
+    upsert_called = False
+
+    def capture_upsert(**_kwargs):
+        nonlocal upsert_called
+        upsert_called = True
+
+    monkeypatch.setattr(store.client, "upsert", capture_upsert)
+
+    with pytest.raises(VectorStoreError, match="expected 3, got 2"):
+        store.save_memories(
+            [
+                ("valid", [1.0, 0.0, 0.0], None),
+                ("invalid", [1.0, 0.0], None),
+            ]
+        )
+
+    assert upsert_called is False
+
+
 def test_data_persists_after_client_recreation(tmp_path):
     store = make_store(tmp_path, collection="persistent_memory")
     store.save_memory(

@@ -1,13 +1,22 @@
 """Persistent Qdrant vector storage for long-term agent memory."""
 
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchAny,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 from config import (
     EMBEDDING_DIM,
@@ -25,6 +34,48 @@ from config import (
 
 class VectorStoreError(RuntimeError):
     """Raised for incompatible Qdrant configuration or data."""
+
+
+_SOURCE_STOP_WORDS = {
+    "csv",
+    "docx",
+    "document",
+    "file",
+    "html",
+    "json",
+    "md",
+    "nguon",
+    "pdf",
+    "pptx",
+    "source",
+    "tai",
+    "tep",
+    "text",
+    "txt",
+    "lieu",
+    "xlsx",
+}
+
+
+def _normalized_tokens(value: str) -> list[str]:
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFD", value.casefold())
+        if unicodedata.category(character) != "Mn"
+    )
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _source_name_matches(query: str, source_name: str) -> bool:
+    query_tokens = [
+        token
+        for token in _normalized_tokens(query)
+        if token not in _SOURCE_STOP_WORDS and len(token) >= 2
+    ]
+    if not query_tokens:
+        return True
+    source_tokens = set(_normalized_tokens(source_name))
+    return any(token in source_tokens for token in query_tokens)
 
 
 def resolved_collection_name(
@@ -71,53 +122,98 @@ class VectorStore:
         embedding: list[float],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if not text.strip():
-            raise VectorStoreError("Memory text must not be empty")
-        if len(embedding) != self.dimension:
-            raise VectorStoreError(
-                f"Vector dimension mismatch: expected {self.dimension}, got {len(embedding)}"
+        return self.save_memories([(text, embedding, metadata)])[0]
+
+    def save_memories(
+        self,
+        records: list[tuple[str, list[float], dict[str, Any] | None]],
+    ) -> list[dict[str, Any]]:
+        """Validate and upsert a group of memory chunks in one Qdrant request."""
+        if not records:
+            raise VectorStoreError("At least one memory record is required")
+
+        points: list[PointStruct] = []
+        saved: list[dict[str, Any]] = []
+        for text, vector, metadata in records:
+            if not text.strip():
+                raise VectorStoreError("Memory text must not be empty")
+            if len(vector) != self.dimension:
+                raise VectorStoreError(
+                    f"Vector dimension mismatch: expected {self.dimension}, got {len(vector)}"
+                )
+            payload = dict(metadata or {})
+            payload.setdefault("memory_id", str(uuid.uuid4()))
+            payload.setdefault("source_type", "fact")
+            payload.setdefault("source_name", "")
+            payload.setdefault("file_id", "")
+            payload.setdefault("chunk_index", 0)
+            payload.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+            payload["text"] = text
+            point_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{payload['memory_id']}:{payload['chunk_index']}",
+                )
             )
+            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
+            saved.append({"id": point_id, "metadata": payload})
+
         self.ensure_collection()
-        payload = dict(metadata or {})
-        payload.setdefault("memory_id", str(uuid.uuid4()))
-        payload.setdefault("source_type", "fact")
-        payload.setdefault("source_name", "")
-        payload.setdefault("file_id", "")
-        payload.setdefault("chunk_index", 0)
-        payload.setdefault("created_at", datetime.now(timezone.utc).isoformat())
-        payload["text"] = text
-        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{payload['memory_id']}:{payload['chunk_index']}"))
         self.client.upsert(
             collection_name=self.collection_name,
-            points=[PointStruct(id=point_id, vector=embedding, payload=payload)],
+            points=points,
             wait=True,
         )
-        return {"id": point_id, "metadata": payload}
+        return saved
 
     def search_memory(
         self,
         query_vector: list[float],
         top_k: int = 5,
         user_id: str | None = None,
+        memory_type: str = "all",
+        source_name: str | None = None,
+        score_threshold: float | None = None,
     ) -> list[dict[str, Any]]:
         if len(query_vector) != self.dimension:
             raise VectorStoreError(
                 f"Vector dimension mismatch: expected {self.dimension}, got {len(query_vector)}"
             )
-        self.ensure_collection()
-        query_filter = None
-        if user_id:
-            query_filter = Filter(
-                must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]
+        allowed_memory_types = {"all", "fact", "document", "task"}
+        if memory_type not in allowed_memory_types:
+            raise VectorStoreError(
+                f"memory_type must be one of: {', '.join(sorted(allowed_memory_types))}"
             )
+        if score_threshold is not None and not -1.0 <= score_threshold <= 1.0:
+            raise VectorStoreError("score_threshold must be between -1 and 1")
+
+        self.ensure_collection()
+        conditions: list[FieldCondition] = []
+        if user_id:
+            conditions.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
+        if memory_type != "all":
+            source_types = {
+                "fact": ["fact"],
+                "document": ["document", "drive_file"],
+                "task": ["task"],
+            }[memory_type]
+            match = (
+                MatchValue(value=source_types[0])
+                if len(source_types) == 1
+                else MatchAny(any=source_types)
+            )
+            conditions.append(FieldCondition(key="source_type", match=match))
+        query_filter = Filter(must=conditions) if conditions else None
+        query_limit = max(1, min(max(top_k * 5, 20) if source_name else top_k, 100))
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             query_filter=query_filter,
-            limit=max(1, min(top_k, 100)),
+            limit=query_limit,
             with_payload=True,
+            score_threshold=score_threshold,
         )
-        return [
+        results = [
             {
                 "text": point.payload.get("text", ""),
                 "score": point.score,
@@ -125,6 +221,16 @@ class VectorStore:
             }
             for point in response.points
         ]
+        if source_name and source_name.strip():
+            results = [
+                result
+                for result in results
+                if _source_name_matches(
+                    source_name,
+                    str(result["metadata"].get("source_name", "")),
+                )
+            ]
+        return results[:top_k]
 
     def has_content_hash(self, user_id: str, content_hash: str) -> bool:
         """Return whether this user already stored the same source content."""
@@ -202,10 +308,28 @@ def save_memory(text: str, embedding: list[float], metadata: dict | None = None)
     return get_vector_store().save_memory(text, embedding, metadata)
 
 
-def search_memory(
-    query_vector: list[float], top_k: int = 5, user_id: str | None = None
+def save_memories(
+    records: list[tuple[str, list[float], dict[str, Any] | None]],
 ) -> list[dict[str, Any]]:
-    return get_vector_store().search_memory(query_vector, top_k, user_id)
+    return get_vector_store().save_memories(records)
+
+
+def search_memory(
+    query_vector: list[float],
+    top_k: int = 5,
+    user_id: str | None = None,
+    memory_type: str = "all",
+    source_name: str | None = None,
+    score_threshold: float | None = None,
+) -> list[dict[str, Any]]:
+    return get_vector_store().search_memory(
+        query_vector,
+        top_k=top_k,
+        user_id=user_id,
+        memory_type=memory_type,
+        source_name=source_name,
+        score_threshold=score_threshold,
+    )
 
 
 def has_content_hash(user_id: str, content_hash: str) -> bool:

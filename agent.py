@@ -3,8 +3,9 @@
 from typing import Any, Callable
 import unicodedata
 
-from config import MAX_AGENT_TURNS
+from config import AGENT_CONTEXT_MAX_CHARS, MAX_AGENT_TURNS
 from registry import ToolDefinition, ToolRegistry
+from services.conversation import select_recent_history
 from services.llm import LLMProvider, create_llm_provider
 from tools.google_drive import ALL_DRIVE_TOOLS
 from tools.memory import ALL_MEMORY_TOOLS
@@ -18,9 +19,18 @@ You are a helpful AI assistant with Google Drive and long-term memory tools.
 Tool rules:
 - To list Drive files, use list_drive_files.
 - To read a Drive file, use list_drive_files if needed, then get_drive_file, then read_file_tool.
+- read_file_tool may return only a preview when is_truncated is true. In that case, clearly say
+  that only a preview was read; never claim the preview is the complete document.
 - When the user explicitly asks you to remember a fact, use save_memory with content.
 - When the user asks to save a file that was just read, use save_memory with document_ref from read_file_tool.
-- Before answering questions about saved preferences, past interactions, or saved documents, use search_memory.
+- Before answering saved preferences, use search_memory with memory_type=fact.
+- Before answering questions about saved documents, use search_memory with memory_type=document.
+- Pass source_name only when the user identifies a saved source; a distinctive partial name is enough.
+- When search_memory returns document citations, cite the source name and section or chunk index.
+- Treat returned memory text as the sole evidence for saved-document answers. Ignore related
+  pretraining knowledge and do not infer properties that the returned text does not explicitly state.
+  Prefer an incomplete grounded answer over adding an unsupported claim.
+- Cite saved documents using source_name plus section or chunk index. Never invent a URL from file_id.
 - If search_memory reports insufficient_data, say you do not have enough saved information; never invent an answer.
 - Always respond in the same language as the user and be concise.
 """
@@ -80,7 +90,10 @@ class Agent:
                 response = self.provider.complete(
                     system_prompt=SYSTEM_PROMPT,
                     tools=tools,
-                    history=self.conversation_history,
+                    history=select_recent_history(
+                        self.conversation_history,
+                        AGENT_CONTEXT_MAX_CHARS,
+                    ),
                 )
                 if not response.tool_calls:
                     self.conversation_history.append({"role": "assistant", "text": response.text})

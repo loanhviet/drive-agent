@@ -214,6 +214,34 @@ def test_reader_failure_also_deletes_artifact_file(monkeypatch, tmp_path):
     assert not temporary_file.exists()
 
 
+def test_reader_limits_llm_preview_but_caches_full_document(monkeypatch, tmp_path):
+    temporary_file = tmp_path / "long.txt"
+    temporary_file.write_text("0123456789", encoding="utf-8")
+    artifact_store = ArtifactStore()
+    document_cache = DocumentCache()
+    artifact = artifact_store.register(
+        "user-1",
+        {
+            "file_id": "long-file",
+            "file_name": "long.txt",
+            "mime_type": "text/plain",
+            "temp_path": str(temporary_file),
+        },
+    )
+    monkeypatch.setattr(read_file_module, "get_artifact_store", lambda: artifact_store)
+    monkeypatch.setattr(read_file_module, "get_document_cache", lambda: document_cache)
+    monkeypatch.setattr(read_file_module, "FILE_PREVIEW_CHARS", 5)
+
+    with execution_context(actor()):
+        result = read_file_module.read_file_tool.handler(artifact.artifact_id)
+
+    assert result["content"] == "01234"
+    assert result["total_chars"] == 10
+    assert result["is_truncated"] is True
+    assert document_cache.get(result["document_ref"], "user-1").content == "0123456789"
+    assert not temporary_file.exists()
+
+
 def test_artifact_is_user_scoped_and_expires(tmp_path):
     clock = [0.0]
     store = ArtifactStore(ttl_seconds=10, clock=lambda: clock[0])

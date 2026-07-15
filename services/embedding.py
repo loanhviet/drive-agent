@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Protocol
 
 from config import (
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
     EMBEDDING_PROVIDER,
@@ -125,9 +126,24 @@ def _embed(texts: Sequence[str], task_type: str) -> list[list[float]]:
     return vectors
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Batch embed documents for retrieval."""
-    return _embed(texts, task_type="RETRIEVAL_DOCUMENT")
+def embed_texts(
+    texts: list[str],
+    batch_size: int = EMBEDDING_BATCH_SIZE,
+) -> list[list[float]]:
+    """Embed documents in bounded batches while preserving input order."""
+    normalized = _validate_inputs(texts)
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise EmbeddingError("batch_size must be a positive integer")
+
+    vectors: list[list[float]] = []
+    for start in range(0, len(normalized), batch_size):
+        batch = normalized[start : start + batch_size]
+        batch_number = start // batch_size + 1
+        try:
+            vectors.extend(_embed(batch, task_type="RETRIEVAL_DOCUMENT"))
+        except EmbeddingError as error:
+            raise EmbeddingError(f"Document embedding batch {batch_number} failed: {error}") from error
+    return vectors
 
 
 @lru_cache(maxsize=128)
