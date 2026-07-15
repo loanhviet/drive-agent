@@ -186,6 +186,8 @@ def search_memory(
         "answer_policy": (
             "Use only claims explicitly present in the returned memory text. "
             "Do not add related background knowledge; omit any unsupported claim. "
+            "A found result may only be semantically related; if none explicitly answer, "
+            "try another appropriate memory_type or report insufficient data. "
             "Cite source_name and section/chunk_index without inventing a file URL."
         ),
         "results_count": len(memories),
@@ -226,7 +228,9 @@ search_memory_tool = ToolDefinition(
     description=(
         "Search the authenticated user's long-term memory for previously saved preferences, facts, "
         "or document knowledge. Use memory_type=fact for preferences and memory_type=document "
-        "for saved files. Optionally filter by natural source-name keywords."
+        "for saved files. Use memory_type=all for identity/profile questions because answers may "
+        "exist in either facts or saved CV/profile documents. Optionally filter by natural "
+        "source-name keywords."
     ),
     input_schema={
         "type": "object",

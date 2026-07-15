@@ -156,6 +156,8 @@ def test_search_reports_insufficient_data(memory_environment):
         "answer_policy": (
             "Use only claims explicitly present in the returned memory text. "
             "Do not add related background knowledge; omit any unsupported claim. "
+            "A found result may only be semantically related; if none explicitly answer, "
+            "try another appropriate memory_type or report insufficient data. "
             "Cite source_name and section/chunk_index without inventing a file URL."
         ),
         "results_count": 0,

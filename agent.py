@@ -23,8 +23,14 @@ Tool rules:
   that only a preview was read; never claim the preview is the complete document.
 - When the user explicitly asks you to remember a fact, use save_memory with content.
 - When the user asks to save a file that was just read, use save_memory with document_ref from read_file_tool.
-- Before answering saved preferences, use search_memory with memory_type=fact.
+- Long-term memory is scoped to the authenticated user, not the chat session. Starting a new chat
+  does not clear saved memory.
+- Before answering explicit saved preferences, use search_memory with memory_type=fact.
+- For identity or profile questions such as name, education, experience, or skills, use
+  search_memory with memory_type=all because the answer may be a fact or in a saved profile/CV.
 - Before answering questions about saved documents, use search_memory with memory_type=document.
+- A found search result is only semantically related. If its text does not explicitly answer the
+  question, refine the query or try another memory_type instead of treating it as the answer.
 - Pass source_name only when the user identifies a saved source; a distinctive partial name is enough.
 - When search_memory returns document citations, cite the source name and section or chunk index.
 - Treat returned memory text as the sole evidence for saved-document answers. Ignore related

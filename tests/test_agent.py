@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from qdrant_client import QdrantClient
 
-from agent import Agent
+from agent import Agent, SYSTEM_PROMPT
 from registry.registry import ToolRegistry
 from services.artifacts import ArtifactStore
 from services.audit import AuditStore
@@ -139,6 +139,13 @@ def test_agent_directly_handles_explicit_vietnamese_drive_listing(tmp_path):
 def test_unknown_provider_is_rejected():
     with pytest.raises(LLMError, match="Unsupported LLM_PROVIDER"):
         create_llm_provider("unknown")
+
+
+def test_system_prompt_searches_all_memory_for_identity_profile_questions():
+    assert "not the chat session" in SYSTEM_PROMPT
+    assert "identity or profile questions" in SYSTEM_PROMPT
+    assert "memory_type=all" in SYSTEM_PROMPT
+    assert "try another memory_type" in SYSTEM_PROMPT
 
 
 def test_offline_drive_document_memory_workflow(monkeypatch, tmp_path):
