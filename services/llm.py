@@ -1,4 +1,4 @@
-"""Provider-neutral LLM tool calling adapters for Gemini and Anthropic."""
+"""Provider-neutral LLM tool-calling adapters."""
 
 import json
 import uuid
@@ -8,6 +8,8 @@ from typing import Any, Protocol
 
 from config import (
     ANTHROPIC_API_KEY,
+    DASHSCOPE_API_KEY,
+    DASHSCOPE_BASE_URL,
     GEMINI_API_KEY,
     GROQ_API_KEY,
     LLM_MODEL,
@@ -210,24 +212,30 @@ class GeminiProvider:
         return contents
 
 
-class GroqProvider:
-    """Groq adapter using its OpenAI-compatible chat-completions endpoint."""
+class _OpenAICompatibleProvider:
+    """Shared adapter for OpenAI-compatible chat-completions endpoints."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None):
-        api_key = GROQ_API_KEY if api_key is None else api_key
-        model = LLM_MODEL if model is None else model
-        if not api_key:
-            raise LLMError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        provider_name: str,
+        extra_body: dict[str, Any] | None = None,
+    ):
         from openai import OpenAI
 
-        self.client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
+        self.provider_name = provider_name
+        self.extra_body = dict(extra_body or {})
 
     def complete(self, *, system_prompt, tools, history) -> ProviderResponse:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self._messages(system_prompt, history),
-            tools=[
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._messages(system_prompt, history),
+            "tools": [
                 {
                     "type": "function",
                     "function": {
@@ -238,20 +246,29 @@ class GroqProvider:
                 }
                 for tool in tools
             ],
-            tool_choice="auto",
-            temperature=LLM_TEMPERATURE,
-        )
+            "tool_choice": "auto",
+            "temperature": LLM_TEMPERATURE,
+        }
+        if self.extra_body:
+            request["extra_body"] = deepcopy(self.extra_body)
+        response = self.client.chat.completions.create(**request)
         if not response.choices:
-            raise LLMError("Groq returned no choices")
+            raise LLMError(f"{self.provider_name} returned no choices")
         message = response.choices[0].message
         calls = []
         for call in message.tool_calls or []:
             try:
                 arguments = json.loads(call.function.arguments or "{}")
             except json.JSONDecodeError as error:
-                raise LLMError(f"Groq returned invalid tool arguments for {call.function.name}") from error
+                raise LLMError(
+                    f"{self.provider_name} returned invalid tool arguments for "
+                    f"{call.function.name}"
+                ) from error
             if not isinstance(arguments, dict):
-                raise LLMError(f"Groq returned non-object tool arguments for {call.function.name}")
+                raise LLMError(
+                    f"{self.provider_name} returned non-object tool arguments for "
+                    f"{call.function.name}"
+                )
             calls.append(ToolCall(id=call.id, name=call.function.name, arguments=arguments))
         return ProviderResponse(text=message.content or "", tool_calls=calls)
 
@@ -291,6 +308,47 @@ class GroqProvider:
         return messages
 
 
+class GroqProvider(_OpenAICompatibleProvider):
+    """Groq adapter using its OpenAI-compatible endpoint."""
+
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        api_key = GROQ_API_KEY if api_key is None else api_key
+        model = LLM_MODEL if model is None else model
+        if not api_key:
+            raise LLMError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+        super().__init__(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
+            model=model,
+            provider_name="Groq",
+        )
+
+
+class QwenProvider(_OpenAICompatibleProvider):
+    """Alibaba Model Studio adapter using its OpenAI-compatible endpoint."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+    ):
+        api_key = DASHSCOPE_API_KEY if api_key is None else api_key
+        model = LLM_MODEL if model is None else model
+        base_url = DASHSCOPE_BASE_URL if base_url is None else base_url
+        if not api_key:
+            raise LLMError("DASHSCOPE_API_KEY is required when LLM_PROVIDER=qwen")
+        if not base_url or not base_url.strip():
+            raise LLMError("DASHSCOPE_BASE_URL is required when LLM_PROVIDER=qwen")
+        super().__init__(
+            api_key=api_key,
+            base_url=base_url.strip().rstrip("/"),
+            model=model,
+            provider_name="Qwen",
+            extra_body={"enable_thinking": False},
+        )
+
+
 class ScriptedProvider:
     """Offline provider used by deterministic integration tests."""
 
@@ -313,6 +371,8 @@ class ScriptedProvider:
 
 def create_llm_provider(provider_name: str | None = None) -> LLMProvider:
     provider_name = LLM_PROVIDER if provider_name is None else provider_name
+    if provider_name == "qwen":
+        return QwenProvider()
     if provider_name == "gemini":
         return GeminiProvider()
     if provider_name == "anthropic":

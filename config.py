@@ -13,10 +13,13 @@ JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
 # LLM
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "qwen")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "")
 _DEFAULT_LLM_MODELS = {
+    "qwen": "qwen3.6-flash",
     "gemini": "gemini-2.5-flash",
     "anthropic": "claude-sonnet-4-20250514",
     "groq": "qwen/qwen3-32b",

@@ -5,7 +5,7 @@ Drive Agent is a Python-based AI assistant that securely connects conversational
 ## What it demonstrates
 
 - A six-step Tool Registry: schema validation, authentication, scopes, rate limit, audit, and execution.
-- Gemini tool calling by default, with Groq and Anthropic adapters.
+- Alibaba Qwen tool calling by default, with Gemini, Groq, and Anthropic adapters.
 - Google Drive list/download/read flow using short-lived, user-scoped artifacts.
 - MarkItDown conversion for common document formats.
 - Bounded session context plus fact/preference and structured document RAG memory in Qdrant.
@@ -44,13 +44,15 @@ Set a strong `JWT_SECRET` (at least 32 characters) in `.env`, then create users 
 .venv/bin/python -m scripts.create_user user --role user
 ```
 
-For a real chat/RAG run, add a Gemini key in `.env`:
+For a real chat/RAG run, add an Alibaba Model Studio key and the OpenAI-compatible
+Singapore workspace URL in `.env`. Gemini remains the embedding provider:
 
 ```dotenv
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.5-flash
+LLM_PROVIDER=qwen
+LLM_MODEL=qwen3.6-flash
+DASHSCOPE_API_KEY=your_alibaba_model_studio_key
+DASHSCOPE_BASE_URL=https://your-workspace-id.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
 GEMINI_API_KEY=your_key_here
-GROQ_API_KEY=
 EMBEDDING_PROVIDER=gemini
 EMBEDDING_MODEL=gemini-embedding-001
 EMBEDDING_DIM=768
@@ -122,7 +124,7 @@ Copy `.env.example`; do not commit `.env`.
 | Group | Important variables |
 | --- | --- |
 | App | `APP_DB_PATH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES`, `AGENT_CONTEXT_MAX_CHARS`, `FILE_PREVIEW_CHARS` |
-| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_TEMPERATURE`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
+| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_TEMPERATURE`, `DASHSCOPE_API_KEY`, `DASHSCOPE_BASE_URL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
 | Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `EMBEDDING_BATCH_SIZE`, `OPENAI_API_KEY` |
 | Qdrant | `QDRANT_MODE`, `QDRANT_PATH`, `QDRANT_URL`, `QDRANT_HOST`, `QDRANT_PORT` |
 | Drive | `GOOGLE_SERVICE_ACCOUNT_FILE`, `GOOGLE_DRIVE_FOLDER_ID` |
@@ -135,7 +137,7 @@ Copy `.env.example`; do not commit `.env`.
 .venv/bin/pre-commit install
 ```
 
-The default test suite is offline. It uses fake LLM/embedding providers, fake Google Drive service objects, temporary SQLite databases, and local Qdrant paths. Live Gemini, Anthropic, Google Drive, and remote Qdrant runs are intentionally not faked: configure real credentials to test them.
+The default test suite is offline. It uses fake LLM/embedding providers, fake Google Drive service objects, temporary SQLite databases, and local Qdrant paths. Live Qwen, Gemini, Anthropic, Google Drive, and remote Qdrant runs are intentionally not faked: configure real credentials to test them.
 
 ## Security and trade-offs
 

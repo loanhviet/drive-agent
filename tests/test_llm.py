@@ -2,7 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.llm import AnthropicProvider, GeminiProvider, GroqProvider, LLMError, ToolCall
+import services.llm as llm_module
+from services.llm import (
+    AnthropicProvider,
+    GeminiProvider,
+    GroqProvider,
+    LLMError,
+    QwenProvider,
+    ToolCall,
+)
 
 
 def history_with_tool_result():
@@ -134,12 +142,73 @@ def test_groq_adapter_serializes_history_and_parses_tool_call(monkeypatch):
     assert "additionalProperties" not in captured["tools"][0]["function"]["parameters"]
 
 
+def test_qwen_adapter_disables_thinking_and_parses_tool_call(monkeypatch):
+    provider = QwenProvider(
+        api_key="fake-key",
+        model="qwen3.6-flash",
+        base_url="https://workspace.example.com/compatible-mode/v1/",
+    )
+    tool_call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="save_memory", arguments='{"content": "Python"}'),
+    )
+    message = SimpleNamespace(content="", tool_calls=[tool_call])
+    fake_response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return fake_response
+
+    monkeypatch.setattr(provider.client.chat.completions, "create", fake_create)
+    schema = {
+        "type": "object",
+        "properties": {"content": {"type": "string"}},
+        "required": ["content"],
+        "additionalProperties": False,
+    }
+
+    response = provider.complete(
+        system_prompt="test",
+        tools=[{"name": "save_memory", "description": "save", "input_schema": schema}],
+        history=history_with_tool_result(),
+    )
+
+    assert response.tool_calls == [ToolCall("call-1", "save_memory", {"content": "Python"})]
+    assert captured["model"] == "qwen3.6-flash"
+    assert captured["extra_body"] == {"enable_thinking": False}
+    assert captured["messages"][0] == {"role": "system", "content": "test"}
+    assert captured["messages"][3]["role"] == "tool"
+    assert "additionalProperties" not in captured["tools"][0]["function"]["parameters"]
+
+
+def test_qwen_adapter_requires_base_url():
+    with pytest.raises(LLMError, match="DASHSCOPE_BASE_URL"):
+        QwenProvider(api_key="fake-key", model="qwen3.6-flash", base_url="")
+
+
+def test_create_llm_provider_supports_qwen(monkeypatch):
+    monkeypatch.setattr(llm_module, "DASHSCOPE_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        llm_module,
+        "DASHSCOPE_BASE_URL",
+        "https://workspace.example.com/compatible-mode/v1",
+    )
+    monkeypatch.setattr(llm_module, "LLM_MODEL", "qwen3.6-flash")
+
+    provider = llm_module.create_llm_provider("qwen")
+
+    assert isinstance(provider, QwenProvider)
+    assert provider.model == "qwen3.6-flash"
+
+
 @pytest.mark.parametrize(
     ("provider", "message"),
     [
         (GeminiProvider, "GEMINI_API_KEY"),
         (AnthropicProvider, "ANTHROPIC_API_KEY"),
         (GroqProvider, "GROQ_API_KEY"),
+        (QwenProvider, "DASHSCOPE_API_KEY"),
     ],
 )
 def test_provider_requires_key(provider, message):
