@@ -8,7 +8,7 @@ Drive Agent is a Python-based AI assistant that securely connects conversational
 - Gemini tool calling by default, with Groq and Anthropic adapters.
 - Google Drive list/download/read flow using short-lived, user-scoped artifacts.
 - MarkItDown conversion for common document formats.
-- Fact/preference memory and chunked document RAG memory in Qdrant.
+- Bounded session context plus fact/preference and structured document RAG memory in Qdrant.
 - Persistent SQLite audit logs and role-based access control.
 - Offline deterministic tests without API keys or Google credentials.
 
@@ -111,7 +111,9 @@ Admin has Drive read plus memory read/write. User has Drive read and memory read
 
 The UI sends chat requests to `/api/chat/stream` using `fetch`, so the JWT Authorization header remains available while the response is streamed. The endpoint emits `status` events for agent/tool progress, then a `final` event containing the completed response and tools used. It emits an `error` event if a turn fails.
 
-Completed user/assistant turns are stored in SQLite per user and browser session ID. Reloading the page restores the visible history; a recreated agent uses the latest 40 messages as LLM context. The Clear button only clears the current screen, so no saved conversation is deleted.
+Completed user/assistant turns are stored in SQLite per user and browser session ID. Reloading the page restores the visible history; a recreated agent loads the latest 40 messages, then sends only the newest complete turns that fit the configured character budget to the LLM. Tool call/result pairs are kept together. This is bounded session context, not a separate summarizing short-term-memory system. The Clear button only clears the current screen, so no saved conversation is deleted.
+
+Full extracted documents are held briefly behind a user-scoped `document_ref`. The LLM receives at most `FILE_PREVIEW_CHARS` characters, while `save_memory` chunks and embeds the full cached document. Document embeddings include source and detected section context; Qdrant payloads retain the original text, section, offsets, and chunk citation metadata. Embedding requests use bounded batches and each document is written to Qdrant in one batch upsert.
 
 ## Configuration
 
@@ -119,9 +121,9 @@ Copy `.env.example`; do not commit `.env`.
 
 | Group | Important variables |
 | --- | --- |
-| App | `APP_DB_PATH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES` |
-| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
-| Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `OPENAI_API_KEY` |
+| App | `APP_DB_PATH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES`, `AGENT_CONTEXT_MAX_CHARS`, `FILE_PREVIEW_CHARS` |
+| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_TEMPERATURE`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
+| Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `EMBEDDING_BATCH_SIZE`, `OPENAI_API_KEY` |
 | Qdrant | `QDRANT_MODE`, `QDRANT_PATH`, `QDRANT_URL`, `QDRANT_HOST`, `QDRANT_PORT` |
 | Drive | `GOOGLE_SERVICE_ACCOUNT_FILE`, `GOOGLE_DRIVE_FOLDER_ID` |
 
@@ -140,5 +142,6 @@ The default test suite is offline. It uses fake LLM/embedding providers, fake Go
 - JWTs are stored in `sessionStorage` because this is a local learning/demo UI; production should use a stronger browser-session strategy.
 - Audit logs redact sensitive argument keys and truncate long strings.
 - Downloaded Drive files are temporary, user-scoped, and deleted after reading or expiry.
+- Long files are not copied wholesale into LLM context; only a preview is sent, while explicit RAG saving uses the cached full text.
 - Qdrant collections include the embedding provider/model/dimension in their name to prevent vector-space mixing.
 - No API key, service account, vector data, local database, cache, or virtual environment is tracked by Git.
