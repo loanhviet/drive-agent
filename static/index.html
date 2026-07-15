@@ -341,6 +341,9 @@ const SESSION_STORAGE_KEY = 'drive-agent-access-token';
 const ACTOR_STORAGE_KEY = 'drive-agent-actor';
 const SESSION_ID_KEY = 'drive-agent-session-id';
 let sessionId = sessionStorage.getItem(SESSION_ID_KEY) || '';
+let activeChatRequest = null;
+let sessionNavigationVersion = 0;
+let sessionNavigationInFlight = false;
 const API = '';
 
 function getToken() {
@@ -411,6 +414,7 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
 });
 
 function logout(message = '') {
+    cancelActiveChatRequest();
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
     sessionStorage.removeItem(ACTOR_STORAGE_KEY);
     document.getElementById('actorLabel').textContent = 'Not signed in';
@@ -449,8 +453,10 @@ function addMessage(text, role, toolsUsed = []) {
 function setTyping(active) {
     const message = arguments.length > 1 ? arguments[1] : 'Agent is working...';
     const el = document.getElementById('typing');
+    const text = document.getElementById('typingText');
     const container = document.getElementById('chatContainer');
-    document.getElementById('typingText').textContent = message;
+    if (!el || !text) return;
+    text.textContent = message;
     if (active) {
         el.classList.add('active');
         container.appendChild(el);
@@ -458,6 +464,28 @@ function setTyping(active) {
     } else {
         el.classList.remove('active');
     }
+}
+
+function cancelActiveChatRequest() {
+    const request = activeChatRequest;
+    activeChatRequest = null;
+    if (request) request.controller.abort();
+    setTyping(false);
+    document.getElementById('sendBtn').disabled = false;
+}
+
+function beginSessionNavigation() {
+    cancelActiveChatRequest();
+    sessionNavigationInFlight = true;
+    document.getElementById('sendBtn').disabled = true;
+    return ++sessionNavigationVersion;
+}
+
+function finishSessionNavigation(version) {
+    if (version !== sessionNavigationVersion) return;
+    sessionNavigationInFlight = false;
+    if (!activeChatRequest) document.getElementById('sendBtn').disabled = false;
+    document.getElementById('input').focus();
 }
 
 function statusMessage(status) {
@@ -475,11 +503,12 @@ function statusMessage(status) {
     return 'Agent is working...';
 }
 
-async function streamChat(payload, onEvent) {
+async function streamChat(payload, onEvent, signal) {
     const res = await authenticatedFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
         body: JSON.stringify(payload),
+        signal,
     });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -508,17 +537,21 @@ async function streamChat(payload, onEvent) {
     }
 }
 
-async function loadHistory() {
+async function loadHistory(targetSessionId = sessionId) {
     if (!getToken()) return;
-    const res = await authenticatedFetch('/api/chat/history?session_id=' + encodeURIComponent(sessionId));
+    const res = await authenticatedFetch(
+        '/api/chat/history?session_id=' + encodeURIComponent(targetSessionId)
+    );
     if (!res.ok) throw new Error('Could not load chat history');
     const data = await res.json();
+    if (targetSessionId !== sessionId) return;
     showWelcome();
     data.messages.forEach(message => addMessage(message.content, message.role));
 }
 
 function showWelcome() {
     const container = document.getElementById('chatContainer');
+    const typing = document.getElementById('typing');
     container.replaceChildren();
     const welcome = document.createElement('div');
     welcome.className = 'welcome';
@@ -537,6 +570,7 @@ function showWelcome() {
     });
     welcome.append(title, description, caps);
     container.appendChild(welcome);
+    if (typing) container.appendChild(typing);
 }
 
 async function initializeChats() {
@@ -547,7 +581,7 @@ async function initializeChats() {
         sessionStorage.setItem(SESSION_ID_KEY, sessionId);
     }
     await loadSessions();
-    await loadHistory();
+    await loadHistory(sessionId);
 }
 
 async function getSessions() {
@@ -585,24 +619,34 @@ async function loadSessions() {
 }
 
 async function createNewChat(select = true) {
-    const res = await authenticatedFetch('/api/chat/sessions', { method: 'POST' });
-    if (!res.ok) throw new Error('Could not create a chat');
-    const created = await res.json();
-    if (select) {
-        sessionId = created.session_id;
-        sessionStorage.setItem(SESSION_ID_KEY, sessionId);
-        showWelcome();
-        await loadSessions();
+    const navigationVersion = select ? beginSessionNavigation() : null;
+    try {
+        const res = await authenticatedFetch('/api/chat/sessions', { method: 'POST' });
+        if (!res.ok) throw new Error('Could not create a chat');
+        const created = await res.json();
+        if (select && navigationVersion === sessionNavigationVersion) {
+            sessionId = created.session_id;
+            sessionStorage.setItem(SESSION_ID_KEY, sessionId);
+            showWelcome();
+            await loadSessions();
+        }
+        return created;
+    } finally {
+        if (select) finishSessionNavigation(navigationVersion);
     }
-    return created;
 }
 
 async function selectSession(nextSessionId) {
     if (nextSessionId === sessionId) return;
-    sessionId = nextSessionId;
-    sessionStorage.setItem(SESSION_ID_KEY, sessionId);
-    await loadSessions();
-    await loadHistory();
+    const navigationVersion = beginSessionNavigation();
+    try {
+        sessionId = nextSessionId;
+        sessionStorage.setItem(SESSION_ID_KEY, sessionId);
+        await loadSessions();
+        await loadHistory(nextSessionId);
+    } finally {
+        finishSessionNavigation(navigationVersion);
+    }
 }
 
 async function deleteSession(targetSessionId, event) {
@@ -623,7 +667,14 @@ async function sendMessage() {
     const input = document.getElementById('input');
     const btn = document.getElementById('sendBtn');
     const message = input.value.trim();
-    if (!message || !getToken()) return;
+    if (!message || !getToken() || activeChatRequest || sessionNavigationInFlight) return;
+
+    const requestSessionId = sessionId;
+    const request = {
+        sessionId: requestSessionId,
+        controller: new AbortController(),
+    };
+    activeChatRequest = request;
 
     addMessage(message, 'user');
     input.value = '';
@@ -633,22 +684,29 @@ async function sendMessage() {
 
     try {
         let completed = false;
-        await streamChat({ session_id: sessionId, message }, (event, data) => {
+        await streamChat({ session_id: requestSessionId, message }, (event, data) => {
+            if (activeChatRequest !== request || sessionId !== requestSessionId) return;
             if (event === 'status') setTyping(true, statusMessage(data));
             if (event === 'final') {
                 addMessage(data.response, 'assistant', data.tools_used || []);
                 completed = true;
             }
             if (event === 'error') throw new Error(data.message || 'Chat request failed');
-        });
+        }, request.controller.signal);
+        if (activeChatRequest !== request || sessionId !== requestSessionId) return;
         if (!completed) throw new Error('Chat stream ended without a response');
         await loadSessions();
     } catch (err) {
-        addMessage('Error: ' + err.message, 'assistant');
+        if (err.name !== 'AbortError' && activeChatRequest === request) {
+            addMessage('Error: ' + err.message, 'assistant');
+        }
     } finally {
-        setTyping(false);
-        btn.disabled = false;
-        input.focus();
+        if (activeChatRequest === request) {
+            activeChatRequest = null;
+            setTyping(false);
+            btn.disabled = false;
+            input.focus();
+        }
     }
 }
 
