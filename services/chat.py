@@ -38,16 +38,53 @@ class ChatStore:
                 CREATE INDEX IF NOT EXISTS idx_chat_user_session_id
                     ON chat_messages(user_id, session_id, id);
                 CREATE TABLE IF NOT EXISTS chat_sessions (
-                    session_id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
                     title TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, session_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
                     ON chat_sessions(user_id, updated_at DESC);
                 """
             )
+            self._migrate_legacy_session_schema(connection)
+
+    @staticmethod
+    def _migrate_legacy_session_schema(connection: sqlite3.Connection) -> None:
+        """Make session IDs user-scoped without discarding existing conversations."""
+        columns = connection.execute("PRAGMA table_info(chat_sessions)").fetchall()
+        primary_key = [
+            row["name"]
+            for row in sorted(
+                (row for row in columns if row["pk"]),
+                key=lambda row: row["pk"],
+            )
+        ]
+        if primary_key == ["user_id", "session_id"]:
+            return
+
+        connection.executescript(
+            """
+            DROP INDEX IF EXISTS idx_chat_sessions_user_updated;
+            CREATE TABLE chat_sessions_v2 (
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, session_id)
+            );
+            INSERT INTO chat_sessions_v2 (user_id, session_id, title, created_at, updated_at)
+                SELECT user_id, session_id, title, created_at, updated_at
+                FROM chat_sessions;
+            DROP TABLE chat_sessions;
+            ALTER TABLE chat_sessions_v2 RENAME TO chat_sessions;
+            CREATE INDEX idx_chat_sessions_user_updated
+                ON chat_sessions(user_id, updated_at DESC);
+            """
+        )
 
     def save_turn(self, *, user_id: str, session_id: str, user_message: str, assistant_message: str) -> None:
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -60,13 +97,12 @@ class ChatStore:
                 """
                 INSERT INTO chat_sessions (session_id, user_id, title, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
+                ON CONFLICT(user_id, session_id) DO UPDATE SET
                     title = CASE
                         WHEN chat_sessions.title = 'New chat' THEN excluded.title
                         ELSE chat_sessions.title
                     END,
                     updated_at = excluded.updated_at
-                WHERE chat_sessions.user_id = excluded.user_id
                 """,
                 (session_id, user_id, self._title_from_message(user_message), timestamp, timestamp),
             )
@@ -111,7 +147,8 @@ class ChatStore:
                 FROM chat_messages AS m
                 WHERE m.user_id = ?
                   AND NOT EXISTS (
-                      SELECT 1 FROM chat_sessions AS s WHERE s.session_id = m.session_id
+                      SELECT 1 FROM chat_sessions AS s
+                      WHERE s.user_id = m.user_id AND s.session_id = m.session_id
                   )
                 GROUP BY m.session_id
                 ORDER BY updated_at DESC
