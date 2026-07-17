@@ -200,20 +200,24 @@ class ToolRegistry:
             self._run_step(steps, current_step, lambda: self.limiter.check(rate_key))
 
             current_step = "audit_log"
-            self._mark_step(steps, current_step, "success")
-            entry = self._build_entry(
-                audit_id,
-                session_id,
-                tool_name,
-                arguments,
-                actor,
+            self._run_step(
                 steps,
-                "in_progress",
-                None,
-                None,
-                started,
+                current_step,
+                lambda: self.audit_store.upsert(
+                    self._build_entry(
+                        audit_id,
+                        session_id,
+                        tool_name,
+                        arguments,
+                        actor,
+                        steps,
+                        "in_progress",
+                        None,
+                        None,
+                        started,
+                    )
+                ),
             )
-            self.audit_store.upsert(entry)
 
             current_step = "execute_tool"
             result = self._run_step(
@@ -230,7 +234,9 @@ class ToolRegistry:
             }
         finally:
             self._skip_pending_steps(steps, except_step="audit_log")
-            self._mark_step(steps, "audit_log", "success")
+            audit_step = next(step for step in steps if step["name"] == "audit_log")
+            if audit_step["status"] == "pending":
+                self._mark_step(steps, "audit_log", "success")
             status = "failed" if structured_error else "success"
             entry = self._build_entry(
                 audit_id,
@@ -247,6 +253,12 @@ class ToolRegistry:
             try:
                 self.audit_store.upsert(entry)
             except Exception as audit_error:
+                self._mark_step(
+                    steps,
+                    "audit_log",
+                    "failed",
+                    error=str(audit_error),
+                )
                 if structured_error is None:
                     structured_error = {
                         "code": "audit_failed",

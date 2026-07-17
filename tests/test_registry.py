@@ -181,3 +181,41 @@ def test_audit_persists_after_store_is_recreated(tmp_path):
     recreated_store = AuditStore(str(database))
 
     assert recreated_store.list_logs()[0]["result"]["value"] == "persist"
+
+
+def test_audit_store_failure_blocks_execution_and_marks_audit_failed():
+    attempted_entries = []
+    executed = False
+
+    class FailingAuditStore:
+        def upsert(self, entry):
+            attempted_entries.append(entry)
+            raise OSError("audit database unavailable")
+
+    def handler(value, mode="safe"):
+        nonlocal executed
+        executed = True
+        return {"value": value, "mode": mode}
+
+    registry = ToolRegistry(
+        authenticator=lambda _token: {
+            "user_id": "test-user",
+            "role": "admin",
+            "scopes": ["sample:write"],
+        },
+        audit_store=FailingAuditStore(),
+    )
+    registry.register(make_tool(handler))
+
+    result = registry.call("sample_tool", {"value": "hello"}, "token")
+
+    assert executed is False
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "audit_failed",
+        "step": "audit_log",
+        "message": "audit database unavailable",
+    }
+    statuses = {step["name"]: step["status"] for step in attempted_entries[-1]["steps"]}
+    assert statuses["audit_log"] == "failed"
+    assert statuses["execute_tool"] == "skipped"
