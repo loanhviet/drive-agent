@@ -21,7 +21,7 @@ async def test_ui_is_served_outside_project_working_directory(client, monkeypatc
     response = await client.get("/")
 
     assert response.status_code == 200
-    assert "AI Agent - Assignment 1" in response.text
+    assert "Drive Agent" in response.text
 
 
 @pytest.mark.anyio
