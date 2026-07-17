@@ -1,149 +1,128 @@
 # Drive Agent
 
-Drive Agent is a Python-based AI assistant that securely connects conversational workflows with Google Drive and long-term semantic memory. It combines provider-neutral LLM tool calling, document extraction, retrieval-augmented generation (RAG), JWT authentication, role-based access control, and auditable tool execution in a reproducible local environment.
+Drive Agent is a portfolio and learning project that connects an LLM-based agent to Google Drive and user-scoped semantic memory. It demonstrates a working end-to-end flow without presenting the project as a production-ready service.
 
-## What it demonstrates
+The project is under active development, with ongoing work focused on reliability, tests, documentation, and the demo workflow.
 
-- A six-step Tool Registry: schema validation, authentication, scopes, rate limit, audit, and execution.
-- Alibaba Qwen tool calling by default, with Gemini, Groq, and Anthropic adapters.
-- Google Drive list/download/read flow using short-lived, user-scoped artifacts.
-- MarkItDown conversion for common document formats.
-- Bounded session context plus fact/preference and structured document RAG memory in Qdrant.
-- Persistent SQLite audit logs and role-based access control.
-- Offline deterministic tests without API keys or Google credentials.
+**Core flow:** JWT-authenticated request -> agent and tool selection -> guarded tool execution -> document extraction -> semantic memory -> streamed response -> persistent chat and audit history.
+
+## Key features
+
+- FastAPI backend with a browser chat UI and SSE progress streaming.
+- Qwen as the default LLM provider, with Gemini, Groq, and Anthropic adapters.
+- A six-step Tool Registry: schema validation, authentication, scope checks, rate limiting, pre-execution audit logging, and tool execution.
+- Read-only Google Drive listing, search, download, and document reading.
+- MarkItDown extraction with a bounded preview and temporary `document_ref` for full-document ingestion.
+- User-scoped fact and document memory in Qdrant using dense-vector retrieval.
+- SQLite persistence for users, chat sessions, completed messages, and audit records.
+- Audit argument redaction and separate role scopes for Drive and memory access.
+- Offline deterministic tests, Ruff checks, and an 85% CI coverage threshold.
+- Docker Compose support with persistent SQLite and Qdrant volumes.
+
+## Demo
+
+**Recorded demo:** [Watch the silent Drive Agent screen recording (WebM)](presentation/video/drive-agent-demo.webm)
+
+The demo follows this workflow:
+
+```text
+Login -> List Drive files -> Read a document -> Save semantic memory
+      -> Retrieve it in another session -> Inspect the audit log
+```
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    UI[JWT chat UI] --> API[FastAPI]
-    API --> Agent[Agent + LLM Provider]
-    Agent --> Registry[Tool Registry]
-    Registry --> Audit[(SQLite audit)]
-    Registry --> Drive[Google Drive tools]
-    Registry --> Memory[Memory tools]
-    Drive --> Reader[MarkItDown]
-    Memory --> Embed[Gemini or OpenAI embeddings]
-    Embed --> Qdrant[(Qdrant)]
+    UI["Browser chat UI"] -->|"Login"| Auth["JWT authentication"]
+    Auth -->|"Bearer token"| API["FastAPI API"]
+    API --> Agent["Agent and LLM adapter"]
+    Agent --> Registry["Six-step Tool Registry"]
+
+    Registry --> Audit[("SQLite audit history")]
+    Registry --> Drive["Read-only Google Drive tools"]
+    Drive --> Extract["MarkItDown extraction"]
+    Extract --> Ref["Preview and document_ref"]
+
+    Registry --> Memory["Memory tools"]
+    Ref -. "Explicit save" .-> Memory
+    Memory --> Embed["Gemini or OpenAI embeddings"]
+    Embed --> Qdrant[("Qdrant semantic memory")]
+
+    API --> Chat[("SQLite users, sessions, and chat history")]
 ```
+
+Most requests use the configured LLM for tool selection. Explicit Drive-list requests use a deterministic shortcut for reliability, while still passing through the Tool Registry.
+
+## Current limitations
+
+- This is a single-process demo, not a production-ready service.
+- Agent instances, artifact/document caches, and rate-limit buckets are held in process memory.
+- `/api/health` only checks the web process and does not verify LLM, Drive, embedding, or Qdrant readiness.
+- Retrieval is dense-vector search only.
+- There is no reviewed retrieval benchmark, hybrid search, or reranking.
+- Google Drive access is read-only.
+- There is no write workflow or human-approval flow.
+- Real provider calls require separately configured credentials.
+- JWTs are stored in `sessionStorage` as a demo trade-off.
 
 ## Quick start
 
+Requirements:
+
+- Python 3.12 or later.
+- Google service-account credentials for the Drive files used in the demo.
+- Credentials for the selected LLM and embedding providers.
+
 ```bash
-git clone <https://github.com/loanhviet/drive-agent>
+git clone https://github.com/loanhviet/drive-agent.git
 cd drive-agent
+
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-Set a strong `JWT_SECRET` (at least 32 characters) in `.env`, then create users locally:
+Configure the default Qwen LLM and Gemini embeddings in `.env`:
+
+```dotenv
+JWT_SECRET=replace-with-at-least-32-characters
+DASHSCOPE_API_KEY=your_key
+DASHSCOPE_BASE_URL=your_openai_compatible_base_url
+GEMINI_API_KEY=your_key
+GOOGLE_SERVICE_ACCOUNT_FILE=credentials.json
+```
+
+Create local users and start the application:
 
 ```bash
 .venv/bin/python -m scripts.create_user admin --role admin
 .venv/bin/python -m scripts.create_user user --role user
-```
-
-For a real chat/RAG run, add an Alibaba Model Studio key and the OpenAI-compatible
-Singapore workspace URL in `.env`. Gemini remains the embedding provider:
-
-```dotenv
-LLM_PROVIDER=qwen
-LLM_MODEL=qwen3.6-flash
-DASHSCOPE_API_KEY=your_alibaba_model_studio_key
-DASHSCOPE_BASE_URL=https://your-workspace-id.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
-GEMINI_API_KEY=your_key_here
-EMBEDDING_PROVIDER=gemini
-EMBEDDING_MODEL=gemini-embedding-001
-EMBEDDING_DIM=768
-```
-
-Start the application:
-
-```bash
 .venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 9004
 ```
 
-Open `http://127.0.0.1:9004`, sign in, then use the chat UI.
+Open `http://127.0.0.1:9004` and log in with a user you created.
 
-## Qdrant options
-
-Development defaults to Qdrant local persistence at `.data/qdrant`; no Docker service is required.
-
-To use Qdrant in Docker:
+Qdrant uses embedded local persistence at `.data/qdrant` by default. To run the application and Qdrant with persistent Docker volumes instead:
 
 ```bash
 docker compose up --build
 ```
 
-Compose overrides Qdrant connection settings for the application and mounts a root-level `credentials.json` into the app container as read-only. At startup, the entrypoint provides a private runtime copy to the unprivileged app user, so restrictive host-file permissions work without changing the secret file mode. Named Docker volumes persist both Qdrant data and the app's SQLite users, chat history, and audit logs across `docker compose down` / `up` cycles. Do not use `docker compose down -v` unless you intentionally want to remove that data. `credentials.json` is never copied into the image or tracked by Git.
+`docker compose down` preserves the `app_data` and `qdrant_data` volumes; `docker compose down -v` removes them.
 
-To validate the Compose file without creating a local `.env`, run:
+The default models are Qwen `qwen3.6-flash` for chat and Gemini `gemini-embedding-001` with 768 dimensions for embeddings. Qdrant collection names include the embedding provider, model, and dimension to avoid mixing incompatible vector spaces.
 
-```bash
-ENV_FILE=.env.example docker compose config
-```
+## Tests and quality checks
 
-## Demo
-
-1. Ask to list Drive files. The agent uses `list_drive_files`.
-2. Ask to read a file. The agent uses `get_drive_file`, then `read_file_tool`.
-3. Say “Hãy nhớ rằng tôi thích Python”. The agent uses `save_memory`.
-4. Ask “Tôi thích ngôn ngữ gì?”. The agent uses `search_memory`.
-5. After reading a file, say “Lưu nội dung file lại”. The agent saves its `document_ref` as chunked RAG memory.
-6. Start a new session and ask about a saved concept. The agent searches Qdrant.
-7. Open Audit Log or call `GET /audit` with a JWT. Each tool call exposes all six pipeline steps.
-
-## API
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/auth/login` | Exchange local username/password for a JWT. |
-| `GET /api/auth/me` | Inspect the current actor. |
-| `POST /api/chat` | Send an authenticated chat message and receive one JSON response. |
-| `POST /api/chat/stream` | Send an authenticated message and receive SSE progress events followed by the final response. |
-| `GET /api/chat/history` | Load the authenticated user's saved messages for a session. |
-| `POST /api/clear` | Clear an authenticated conversation history. |
-| `GET /audit` | Get persistent tool audit logs. |
-| `GET /api/health` | Health check without external-service calls. |
-
-Admin has Drive read plus memory read/write. User has Drive read and memory read only. Audit logs are scoped to the requesting user unless the requester is an admin.
-
-## Chat progress and history
-
-The UI sends chat requests to `/api/chat/stream` using `fetch`, so the JWT Authorization header remains available while the response is streamed. The endpoint emits `status` events for agent/tool progress, then a `final` event containing the completed response and tools used. It emits an `error` event if a turn fails.
-
-Completed user/assistant turns are stored in SQLite per user and browser session ID. Reloading the page restores the visible history; a recreated agent loads the latest 40 messages, then sends only the newest complete turns that fit the configured character budget to the LLM. Tool call/result pairs are kept together. This is bounded session context, not a separate summarizing short-term-memory system. The Clear button only clears the current screen, so no saved conversation is deleted.
-
-Full extracted documents are held briefly behind a user-scoped `document_ref`. The LLM receives at most `FILE_PREVIEW_CHARS` characters, while `save_memory` chunks and embeds the full cached document. Document embeddings include source and detected section context; Qdrant payloads retain the original text, section, offsets, and chunk citation metadata. Embedding requests use bounded batches and each document is written to Qdrant in one batch upsert.
-
-## Configuration
-
-Copy `.env.example`; do not commit `.env`.
-
-| Group | Important variables |
-| --- | --- |
-| App | `APP_DB_PATH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES`, `AGENT_CONTEXT_MAX_CHARS`, `FILE_PREVIEW_CHARS` |
-| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_TEMPERATURE`, `DASHSCOPE_API_KEY`, `DASHSCOPE_BASE_URL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` |
-| Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `EMBEDDING_BATCH_SIZE`, `OPENAI_API_KEY` |
-| Qdrant | `QDRANT_MODE`, `QDRANT_PATH`, `QDRANT_URL`, `QDRANT_HOST`, `QDRANT_PORT` |
-| Drive | `GOOGLE_SERVICE_ACCOUNT_FILE`, `GOOGLE_DRIVE_FOLDER_ID` |
-
-## Quality checks
+The default suite runs offline with fake LLM, embedding, Drive, and vector-store components.
 
 ```bash
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest -q
 .venv/bin/ruff check .
-.venv/bin/pre-commit install
+.venv/bin/pre-commit run --all-files
 ```
 
-The default test suite is offline. It uses fake LLM/embedding providers, fake Google Drive service objects, temporary SQLite databases, and local Qdrant paths. Live Qwen, Gemini, Anthropic, Google Drive, and remote Qdrant runs are intentionally not faked: configure real credentials to test them.
+CI runs Ruff and pytest coverage across the agent, registry, services, tools, and server modules. The coverage job fails below 85%.
 
-## Security and trade-offs
-
-- JWTs are stored in `sessionStorage` because this is a local learning/demo UI; production should use a stronger browser-session strategy.
-- Audit logs redact sensitive argument keys and truncate long strings.
-- Downloaded Drive files are temporary, user-scoped, and deleted after reading or expiry.
-- Long files are not copied wholesale into LLM context; only a preview is sent, while explicit RAG saving uses the cached full text.
-- Qdrant collections include the embedding provider/model/dimension in their name to prevent vector-space mixing.
-- No API key, service account, vector data, local database, cache, or virtual environment is tracked by Git.
+> This repository is a portfolio and learning project. It has not been reviewed or validated for production, regulated, or sensitive-data use.
