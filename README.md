@@ -21,7 +21,7 @@ The project is under active development, with ongoing work focused on reliabilit
 
 ## Demo
 
-**Recorded demo:** [Watch the silent Drive Agent screen recording (WebM)](presentation/video/drive-agent-demo.webm)
+https://github.com/user-attachments/assets/f60a6840-1178-4070-834f-ed7e33fe7bbe
 
 The demo follows this workflow:
 
