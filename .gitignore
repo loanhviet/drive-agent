@@ -36,6 +36,7 @@ docs/
 *.temp
 *.log
 .cache/
+artifacts/
 dist/
 build/
 *.egg-info/

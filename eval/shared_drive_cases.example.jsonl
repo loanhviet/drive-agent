@@ -1,0 +1,3 @@
+{"case_id":"pdf-001","question":"What policy applies to public examples?","expected_source":"Public guide.pdf","expected_locator":{"type":"page","value":2},"expected_terms":["sanitized"],"answerable":true}
+{"case_id":"section-001","question":"What does the overview say?","expected_source":"Public notes.md","expected_locator":{"type":"section","value":"Overview"},"expected_terms":["overview"],"answerable":true}
+{"case_id":"none-001","question":"What is the launch code?","expected_source":"","expected_locator":{"type":"none","value":null},"expected_terms":[],"answerable":false}
