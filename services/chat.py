@@ -1,12 +1,13 @@
 """SQLite persistence for user-visible chat history."""
 
-import sqlite3
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 from config import APP_DB_PATH
+from services.database import connect_sqlite
 
 
 class ChatStore:
@@ -17,10 +18,8 @@ class ChatStore:
         self._lock = Lock()
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        return connect_sqlite(self.db_path)
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +32,7 @@ class ChatStore:
                     session_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_user_session_id
@@ -50,9 +50,10 @@ class ChatStore:
                 """
             )
             self._migrate_legacy_session_schema(connection)
+            self._migrate_message_metadata(connection)
 
     @staticmethod
-    def _migrate_legacy_session_schema(connection: sqlite3.Connection) -> None:
+    def _migrate_legacy_session_schema(connection) -> None:
         """Make session IDs user-scoped without discarding existing conversations."""
         columns = connection.execute("PRAGMA table_info(chat_sessions)").fetchall()
         primary_key = [
@@ -86,11 +87,34 @@ class ChatStore:
             """
         )
 
-    def save_turn(self, *, user_id: str, session_id: str, user_message: str, assistant_message: str) -> None:
+    @staticmethod
+    def _migrate_message_metadata(connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_messages)")}
+        if "metadata_json" not in columns:
+            connection.execute(
+                "ALTER TABLE chat_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+            )
+
+    def save_turn(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        user_message: str,
+        assistant_message: str,
+        assistant_citations: list[dict] | None = None,
+    ) -> None:
         timestamp = datetime.now(timezone.utc).isoformat()
         rows = (
-            (user_id, session_id, "user", user_message, timestamp),
-            (user_id, session_id, "assistant", assistant_message, timestamp),
+            (user_id, session_id, "user", user_message, "{}", timestamp),
+            (
+                user_id,
+                session_id,
+                "assistant",
+                assistant_message,
+                json.dumps({"citations": assistant_citations or []}, ensure_ascii=False),
+                timestamp,
+            ),
         )
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -108,8 +132,9 @@ class ChatStore:
             )
             connection.executemany(
                 """
-                INSERT INTO chat_messages (user_id, session_id, role, content, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO chat_messages (
+                    user_id, session_id, role, content, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -182,20 +207,30 @@ class ChatStore:
     def list_messages(self, *, user_id: str, session_id: str, limit: int | None = None) -> list[dict]:
         params: list[object] = [user_id, session_id]
         query = (
-            "SELECT id, role, content, created_at FROM chat_messages "
+            "SELECT id, role, content, metadata_json, created_at FROM chat_messages "
             "WHERE user_id = ? AND session_id = ? ORDER BY id ASC"
         )
         if limit is not None:
             query = (
-                "SELECT id, role, content, created_at FROM ("
-                "SELECT id, role, content, created_at FROM chat_messages "
+                "SELECT id, role, content, metadata_json, created_at FROM ("
+                "SELECT id, role, content, metadata_json, created_at FROM chat_messages "
                 "WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ?"
                 ") ORDER BY id ASC"
             )
             params.append(max(1, limit))
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        messages = []
+        for row in rows:
+            message = dict(row)
+            raw_metadata = message.pop("metadata_json", "{}")
+            try:
+                metadata = json.loads(raw_metadata)
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            message["citations"] = metadata.get("citations", [])
+            messages.append(message)
+        return messages
 
     @staticmethod
     def _title_from_message(message: str) -> str:

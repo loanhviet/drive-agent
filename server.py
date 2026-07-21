@@ -3,7 +3,9 @@ FastAPI Server - Serves the Agent via HTTP API + HTML chat UI on port 9004.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
+import os
 from queue import Empty, Queue
 import traceback
 from pathlib import Path
@@ -18,11 +20,26 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from agent import Agent
+from config import GOOGLE_DRIVE_FOLDER_ID, GOOGLE_SERVICE_ACCOUNT_FILE
 from services.audit import get_audit_store
 from services.auth import AuthenticatedUser, AuthenticationError, get_auth_service
 from services.chat import get_chat_store
+from services.drive_ingestion import get_drive_ingestion_worker
+from services.drive_vectorstore import get_drive_document_store
+from services.ingestion import get_ingestion_store
 
-app = FastAPI(title="AI Agent - Assignment 1")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    worker = get_drive_ingestion_worker()
+    worker.start()
+    try:
+        yield
+    finally:
+        worker.stop(timeout=10.0)
+
+
+app = FastAPI(title="AI Agent - Assignment 1", lifespan=lifespan)
 STATIC_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
 app.add_middleware(
@@ -77,6 +94,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     tools_used: list[str] = Field(default_factory=list)
+    citations: list[dict] = Field(default_factory=list)
 
 
 class ClearRequest(BaseModel):
@@ -93,6 +111,10 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: dict
+
+
+class SyncRequest(BaseModel):
+    mode: str = Field(default="incremental", pattern="^(incremental|full)$")
 
 
 class ChatSessionResponse(BaseModel):
@@ -121,31 +143,36 @@ def _run_chat_turn(
     user: AuthenticatedUser,
     token: str,
     on_status=None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[dict]]:
     """Run and persist one complete turn. Failed turns are intentionally not saved."""
     session_id = req.session_id or "default"
     agent = get_agent(session_id, user.user_id, token)
     previous_history = list(getattr(agent, "conversation_history", []))
     previous_tools = list(getattr(agent, "last_tools_used", []))
+    previous_citations = list(getattr(agent, "last_citations", []))
     if on_status is None:
         response = agent.run(req.message)
     else:
         response = agent.run(req.message, on_status=on_status)
     tools_used = list(agent.last_tools_used)
+    citations = list(getattr(agent, "last_citations", []))
     try:
         get_chat_store().save_turn(
             user_id=user.user_id,
             session_id=session_id,
             user_message=req.message.strip(),
             assistant_message=response,
+            assistant_citations=citations,
         )
     except Exception:
         if hasattr(agent, "conversation_history"):
             agent.conversation_history = previous_history
         if hasattr(agent, "last_tools_used"):
             agent.last_tools_used = previous_tools
+        if hasattr(agent, "last_citations"):
+            agent.last_citations = previous_citations
         raise
-    return response, tools_used
+    return response, tools_used, citations
 
 
 def _sse(event: str, data: dict) -> str:
@@ -182,13 +209,13 @@ async def chat(
     if not _claim_session(user.user_id, session_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Chat session is already processing")
     try:
-        response, tools_used = _run_chat_turn(req, user, token)
-        return ChatResponse(response=response, tools_used=tools_used)
+        response, tools_used, citations = _run_chat_turn(req, user, token)
+        return ChatResponse(response=response, tools_used=tools_used, citations=citations)
     except Exception as e:
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
-            content={"response": f"Error: {e}", "tools_used": []},
+            content={"response": f"Error: {e}", "tools_used": [], "citations": []},
         )
     finally:
         _release_session(user.user_id, session_id)
@@ -209,10 +236,19 @@ async def chat_stream(
 
         def run_worker() -> None:
             try:
-                response, tools_used = _run_chat_turn(
+                response, tools_used, citations = _run_chat_turn(
                     req, user, token, lambda payload: queue.put(("status", payload))
                 )
-                queue.put(("final", {"response": response, "tools_used": tools_used}))
+                queue.put(
+                    (
+                        "final",
+                        {
+                            "response": response,
+                            "tools_used": tools_used,
+                            "citations": citations,
+                        },
+                    )
+                )
             except Exception as error:
                 queue.put(("error", {"message": f"Error: {error}"}))
             finally:
@@ -296,6 +332,107 @@ async def delete_chat_session(
     return {"status": "deleted", "session_id": session_id}
 
 
+def _require_scope(user: AuthenticatedUser, scope: str) -> None:
+    if scope not in user.scopes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing required scope: {scope}",
+        )
+
+
+@app.post("/api/drive/sync", status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_drive_sync(
+    req: SyncRequest,
+    auth: Annotated[tuple[AuthenticatedUser, str], Depends(get_current_auth)],
+):
+    user, _ = auth
+    _require_scope(user, "drive:sync")
+    if not GOOGLE_DRIVE_FOLDER_ID:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "drive_folder_not_configured"},
+        )
+    job = get_ingestion_store().enqueue_job(
+        mode=req.mode,
+        trigger="manual",
+        requested_by=user.user_id,
+    )
+    return job
+
+
+@app.get("/api/drive/sync/status")
+async def drive_sync_status(
+    auth: Annotated[tuple[AuthenticatedUser, str], Depends(get_current_auth)],
+):
+    user, _ = auth
+    _require_scope(user, "drive:read")
+    payload = get_ingestion_store().sync_status()
+    if "drive:sync" not in user.scopes:
+        for key in ("active_job", "latest_job"):
+            if payload.get(key):
+                payload[key] = {
+                    field: value
+                    for field, value in payload[key].items()
+                    if field not in {"requested_by", "error"}
+                }
+    return payload
+
+
+@app.get("/api/drive/sync/jobs/{job_id}")
+async def drive_sync_job(
+    job_id: str,
+    auth: Annotated[tuple[AuthenticatedUser, str], Depends(get_current_auth)],
+):
+    user, _ = auth
+    _require_scope(user, "drive:sync")
+    job = get_ingestion_store().get_job(job_id, include_items=True)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sync job not found")
+    return job
+
+
+@app.get("/api/drive/documents")
+async def drive_documents(
+    auth: Annotated[tuple[AuthenticatedUser, str], Depends(get_current_auth)],
+    q: str = "",
+    document_status: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    user, _ = auth
+    _require_scope(user, "drive:read")
+    try:
+        payload = get_ingestion_store().list_documents(
+            query=q,
+            status=document_status,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    public_fields = {
+        "file_id",
+        "source_name",
+        "mime_type",
+        "drive_path",
+        "web_view_link",
+        "modified_time",
+        "status",
+        "total_chars",
+        "page_count",
+        "chunk_count",
+        "indexed_at",
+        "updated_at",
+    }
+    if "drive:sync" in user.scopes:
+        public_fields.add("error")
+    payload["documents"] = [
+        {field: value for field, value in document.items() if field in public_fields}
+        for document in payload["documents"]
+    ]
+    return payload
+
+
 @app.get("/api/audit")
 @app.get("/audit")
 async def get_audit(
@@ -323,6 +460,34 @@ async def health():
 
 
 # ---- Serve HTML UI ----
+
+@app.get("/api/ready")
+async def readiness():
+    checks = {
+        "database": False,
+        "qdrant": False,
+        "drive_config": bool(GOOGLE_DRIVE_FOLDER_ID and GOOGLE_SERVICE_ACCOUNT_FILE),
+        "credentials_file": bool(
+            GOOGLE_SERVICE_ACCOUNT_FILE and os.path.isfile(GOOGLE_SERVICE_ACCOUNT_FILE)
+        ),
+        "worker": get_drive_ingestion_worker().is_alive,
+    }
+    try:
+        get_ingestion_store().sync_status()
+        checks["database"] = True
+    except Exception:
+        pass
+    try:
+        get_drive_document_store().ensure_collection()
+        checks["qdrant"] = True
+    except Exception:
+        pass
+    ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": checks},
+    )
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():

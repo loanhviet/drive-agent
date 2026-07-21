@@ -1,24 +1,32 @@
 """Agent core: provider-neutral tool-use loop connected to ToolRegistry."""
 
 from typing import Any, Callable
+import re
 import unicodedata
 
 from config import AGENT_CONTEXT_MAX_CHARS, MAX_AGENT_TURNS
 from registry import ToolDefinition, ToolRegistry
 from services.conversation import select_recent_history
 from services.llm import LLMProvider, create_llm_provider
+from tools.drive_knowledge import ALL_DRIVE_KNOWLEDGE_TOOLS
 from tools.google_drive import ALL_DRIVE_TOOLS
 from tools.memory import ALL_MEMORY_TOOLS
 from tools.read_file import ALL_READ_FILE_TOOLS
 
-ALL_TOOLS: list[ToolDefinition] = ALL_DRIVE_TOOLS + ALL_READ_FILE_TOOLS + ALL_MEMORY_TOOLS
+ALL_TOOLS: list[ToolDefinition] = (
+    ALL_DRIVE_TOOLS + ALL_READ_FILE_TOOLS + ALL_MEMORY_TOOLS + ALL_DRIVE_KNOWLEDGE_TOOLS
+)
 
 SYSTEM_PROMPT = """\
 You are a helpful AI assistant with Google Drive and long-term memory tools.
 
 Tool rules:
 - To list Drive files, use list_drive_files.
-- To read a Drive file, use list_drive_files if needed, then get_drive_file, then read_file_tool.
+- To read a Drive file directly, use list_drive_files if needed, then get_drive_file, then read_file_tool.
+- For questions about documents already indexed from the shared Drive folder, use
+  search_drive_knowledge instead of downloading or saving the file again.
+- Claims from search_drive_knowledge must use its exact citation IDs such as [S1]. If returned
+  chunks do not directly answer the question, say the indexed Drive corpus has insufficient data.
 - read_file_tool may return only a preview when is_truncated is true. In that case, clearly say
   that only a preview was read; never claim the preview is the complete document.
 - When the user explicitly asks you to remember a fact, use save_memory with content.
@@ -60,6 +68,7 @@ class Agent:
         self.max_turns = max_turns
         self.conversation_history: list[dict[str, Any]] = []
         self.last_tools_used: list[str] = []
+        self.last_citations: list[dict[str, Any]] = []
         self.registry = registry or ToolRegistry()
         for tool in tools or ALL_TOOLS:
             self.registry.register(tool)
@@ -84,8 +93,11 @@ class Agent:
             raise ValueError("user_message must not be empty")
         starting_history_length = len(self.conversation_history)
         previous_tools_used = self.last_tools_used
+        previous_citations = self.last_citations
         self.conversation_history.append({"role": "user", "text": user_message.strip()})
         self.last_tools_used = []
+        self.last_citations = []
+        available_citations: dict[str, dict[str, Any]] = {}
         tools = self.get_tools_for_llm()
 
         try:
@@ -102,6 +114,10 @@ class Agent:
                     ),
                 )
                 if not response.tool_calls:
+                    self.last_citations = self._citations_for_response(
+                        response.text,
+                        available_citations,
+                    )
                     self.conversation_history.append({"role": "assistant", "text": response.text})
                     return response.text
 
@@ -122,6 +138,8 @@ class Agent:
                         session_id=self.session_id,
                     )
                     self.last_tools_used.append(call.name)
+                    if call.name == "search_drive_knowledge" and result["ok"]:
+                        self._capture_drive_citations(result["result"], available_citations)
                     tool_results.append(
                         {"tool_call_id": call.id, "name": call.name, "result": result}
                     )
@@ -137,7 +155,29 @@ class Agent:
         except Exception:
             self.conversation_history = self.conversation_history[:starting_history_length]
             self.last_tools_used = previous_tools_used
+            self.last_citations = previous_citations
             raise
+
+    @staticmethod
+    def _capture_drive_citations(
+        payload: dict[str, Any],
+        available: dict[str, dict[str, Any]],
+    ) -> None:
+        for result in payload.get("results", []):
+            citation = result.get("citation") or {}
+            citation_id = f"S{len(available) + 1}"
+            result["citation_id"] = citation_id
+            citation["id"] = citation_id
+            result["citation"] = citation
+            available[citation_id] = citation
+
+    @staticmethod
+    def _citations_for_response(
+        response: str,
+        available: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        ordered_ids = dict.fromkeys(re.findall(r"\[(S\d+)\]", response))
+        return [available[citation_id] for citation_id in ordered_ids if citation_id in available]
 
     @staticmethod
     def _emit_status(
@@ -197,6 +237,7 @@ class Agent:
     def clear_history(self) -> None:
         self.conversation_history = []
         self.last_tools_used = []
+        self.last_citations = []
 
     def get_audit_log(self) -> list[dict[str, Any]]:
         return self.registry.get_audit_log(session_id=self.session_id)
