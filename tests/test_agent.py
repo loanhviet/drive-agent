@@ -228,3 +228,63 @@ def test_offline_drive_document_memory_workflow(monkeypatch, tmp_path):
     client.close()
     set_vector_store_for_testing(None)
     set_embedding_provider_for_testing(None)
+
+def test_agent_collects_only_citations_referenced_in_final_answer(tmp_path):
+    from registry.models import ToolDefinition
+
+    search_tool = ToolDefinition(
+        name="search_drive_knowledge",
+        description="Search indexed Drive documents.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        required_scopes=["drive:read"],
+        handler=lambda query: {
+            "status": "found",
+            "query": query,
+            "results": [
+                {
+                    "citation_id": "S1",
+                    "text": "Grounded evidence",
+                    "citation": {
+                        "id": "S1",
+                        "source_name": "Guide.pdf",
+                        "page_number": 2,
+                    },
+                },
+                {
+                    "citation_id": "S2",
+                    "text": "Unused evidence",
+                    "citation": {
+                        "id": "S2",
+                        "source_name": "Other.pdf",
+                        "page_number": 1,
+                    },
+                },
+            ],
+        },
+    )
+    provider = ScriptedProvider(
+        [
+            ProviderResponse(
+                tool_calls=[
+                    ToolCall("search", "search_drive_knowledge", {"query": "evidence"})
+                ]
+            ),
+            ProviderResponse(text="Grounded answer [S1]."),
+        ]
+    )
+    agent = Agent(
+        "token",
+        provider=provider,
+        registry=make_registry(tmp_path),
+        tools=[search_tool],
+    )
+
+    answer = agent.run("Find the indexed evidence")
+
+    assert answer == "Grounded answer [S1]."
+    assert [citation["source_name"] for citation in agent.last_citations] == ["Guide.pdf"]

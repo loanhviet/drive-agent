@@ -121,3 +121,24 @@ def test_chat_store_creates_lists_and_deletes_sessions(tmp_path):
     assert store.delete_session(user_id="user-a", session_id=other_session["session_id"]) is False
     assert store.delete_session(user_id="user-a", session_id=session["session_id"]) is True
     assert store.list_messages(user_id="user-a", session_id=session["session_id"]) == []
+
+def test_chat_store_persists_structured_citations(tmp_path):
+    store = ChatStore(str(tmp_path / "chat.db"))
+    citation = {
+        "id": "S1",
+        "source_name": "Guide.pdf",
+        "page_number": 2,
+        "web_view_link": "https://drive.google.com/file/d/file-1/view",
+    }
+    store.save_turn(
+        user_id="user",
+        session_id="session",
+        user_message="Question",
+        assistant_message="Grounded answer [S1]",
+        assistant_citations=[citation],
+    )
+
+    messages = store.list_messages(user_id="user", session_id="session")
+
+    assert messages[0]["citations"] == []
+    assert messages[1]["citations"] == [citation]

@@ -303,3 +303,38 @@ def test_registry_runs_staged_drive_tools_in_authenticated_context(monkeypatch, 
     assert read["ok"] is True
     assert read["result"]["content"] == "Registry reads Drive files."
     assert all(log["status"] == "success" for log in registry.get_audit_log())
+
+def test_walk_files_recurses_and_tracks_drive_path(monkeypatch):
+    tree = {
+        "root": [
+            {
+                "id": "folder-a",
+                "name": "Folder A",
+                "mimeType": drive_service.FOLDER_MIME_TYPE,
+            },
+            {
+                "id": "root-file",
+                "name": "Root.txt",
+                "mimeType": "text/plain",
+            },
+        ],
+        "folder-a": [
+            {
+                "id": "nested-file",
+                "name": "Nested.pdf",
+                "mimeType": "application/pdf",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        drive_service,
+        "list_files",
+        lambda folder_id, page_size=1000: tree[folder_id],
+    )
+
+    files = drive_service.walk_files("root")
+
+    assert [(item["id"], item["drive_path"]) for item in files] == [
+        ("root-file", "Root.txt"),
+        ("nested-file", "Folder A/Nested.pdf"),
+    ]

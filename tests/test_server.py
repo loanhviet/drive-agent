@@ -121,6 +121,7 @@ async def test_chat_sessions_can_be_created_listed_and_deleted(client, admin_tok
 async def test_chat_returns_tools_used_from_agent(client, monkeypatch, admin_token):
     class FakeAgent:
         last_tools_used = ["list_drive_files", "get_drive_file"]
+        last_citations = []
 
         def run(self, _message):
             return "I found the requested file."
@@ -137,6 +138,7 @@ async def test_chat_returns_tools_used_from_agent(client, monkeypatch, admin_tok
     assert response.json() == {
         "response": "I found the requested file.",
         "tools_used": ["list_drive_files", "get_drive_file"],
+        "citations": [],
     }
 
 
@@ -214,3 +216,70 @@ async def test_user_only_sees_own_audit_logs(
         "admin-id",
         "user-id",
     }
+
+@pytest.mark.anyio
+async def test_drive_sync_is_admin_only_and_deduplicated(
+    client,
+    monkeypatch,
+    tmp_path,
+    admin_token,
+    user_token,
+):
+    from services.ingestion import IngestionStore
+
+    store = IngestionStore(str(tmp_path / "ingestion.db"))
+    monkeypatch.setattr(server, "GOOGLE_DRIVE_FOLDER_ID", "folder-1")
+    monkeypatch.setattr(server, "get_ingestion_store", lambda: store)
+
+    user_response = await client.post(
+        "/api/drive/sync",
+        json={"mode": "incremental"},
+        headers={"Authorization": f"Bearer {user_token}"},
+    )
+    assert user_response.status_code == 403
+
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    first = await client.post("/api/drive/sync", json={"mode": "incremental"}, headers=headers)
+    second = await client.post("/api/drive/sync", json={"mode": "full"}, headers=headers)
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["job_id"] == first.json()["job_id"]
+    assert second.json()["deduplicated"] is True
+
+
+@pytest.mark.anyio
+async def test_drive_documents_are_visible_to_read_scope(
+    client,
+    monkeypatch,
+    tmp_path,
+    user_token,
+):
+    from services.ingestion import IngestionStore
+
+    store = IngestionStore(str(tmp_path / "ingestion.db"))
+    store.record_document(
+        corpus_id="shared-drive",
+        file_id="file-1",
+        source_name="Guide.pdf",
+        mime_type="application/pdf",
+        drive_path="Guide.pdf",
+        web_view_link="https://drive.google.com/file/d/file-1/view",
+        modified_time="2026-01-01T00:00:00Z",
+        source_fingerprint="fingerprint",
+        status="indexed",
+        last_seen_job_id="job",
+        active_revision_id="revision",
+    )
+    monkeypatch.setattr(server, "get_ingestion_store", lambda: store)
+
+    response = await client.get(
+        "/api/drive/documents",
+        headers={"Authorization": f"Bearer {user_token}"},
+    )
+
+    assert response.status_code == 200
+    document = response.json()["documents"][0]
+    assert document["source_name"] == "Guide.pdf"
+    assert "source_fingerprint" not in document
+    assert "active_revision_id" not in document
