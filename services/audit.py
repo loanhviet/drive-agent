@@ -2,12 +2,12 @@
 
 import json
 import re
-import sqlite3
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from config import APP_DB_PATH
+from services.database import connect_sqlite
 
 SENSITIVE_KEY = re.compile(
     r"(api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)",
@@ -36,10 +36,8 @@ class AuditStore:
         self._lock = Lock()
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        return connect_sqlite(self.db_path)
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +129,7 @@ class AuditStore:
         return [self._deserialize(row) for row in rows]
 
     @staticmethod
-    def _deserialize(row: sqlite3.Row) -> dict[str, Any]:
+    def _deserialize(row) -> dict[str, Any]:
         entry = dict(row)
         for field in ("arguments", "steps", "result", "error"):
             entry[field] = json.loads(entry[field]) if entry[field] else None

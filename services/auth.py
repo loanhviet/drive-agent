@@ -1,6 +1,5 @@
 """JWT authentication and SQLite-backed users."""
 
-import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,9 +10,10 @@ import jwt
 from pwdlib import PasswordHash
 
 from config import APP_DB_PATH, JWT_EXPIRE_MINUTES, JWT_SECRET
+from services.database import connect_sqlite
 
 ROLE_SCOPES = {
-    "admin": ["drive:read", "memory:read", "memory:write"],
+    "admin": ["drive:read", "drive:sync", "memory:read", "memory:write"],
     "user": ["drive:read", "memory:read"],
 }
 
@@ -46,10 +46,8 @@ class AuthService:
         self.password_hash = PasswordHash.recommended()
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        return connect_sqlite(self.db_path)
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +143,7 @@ class AuthService:
             raise RuntimeError("JWT_SECRET must contain at least 32 characters")
 
     @staticmethod
-    def _user_from_row(row: sqlite3.Row) -> AuthenticatedUser:
+    def _user_from_row(row) -> AuthenticatedUser:
         role = row["role"]
         return AuthenticatedUser(
             user_id=row["user_id"],
