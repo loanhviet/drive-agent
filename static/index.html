@@ -237,6 +237,44 @@
         .audit-entry .status-ok { color: #4ade80; }
         .audit-entry .status-fail { color: #f87171; }
 
+        .source-list { margin-top: 10px; display: grid; gap: 6px; white-space: normal; }
+        .source-card {
+            display: block; padding: 8px 10px; border: 1px solid #334155;
+            border-radius: 8px; background: #0f172a; color: #cbd5e1;
+            text-decoration: none; font-size: 12px;
+        }
+        .source-card:hover { border-color: #3b82f6; }
+        .source-card .source-title { color: #93c5fd; font-weight: 600; }
+        .source-card .source-snippet { color: #94a3b8; margin-top: 3px; }
+
+        .documents-panel {
+            display: none; position: fixed; right: 0; top: 0; bottom: 0;
+            width: min(560px, 100vw); background: #1e293b;
+            border-left: 1px solid #334155; z-index: 110; flex-direction: column;
+        }
+        .documents-panel.open { display: flex; }
+        .documents-panel .panel-header {
+            padding: 16px; border-bottom: 1px solid #334155;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .documents-panel .panel-controls {
+            padding: 12px; display: flex; gap: 8px; flex-wrap: wrap;
+            border-bottom: 1px solid #334155;
+        }
+        .documents-summary { color: #94a3b8; font-size: 12px; padding: 0 12px 12px; }
+        .documents-body { flex: 1; overflow-y: auto; padding: 12px; }
+        .document-row {
+            border: 1px solid #334155; border-radius: 8px; padding: 10px;
+            margin-bottom: 8px; background: #0f172a;
+        }
+        .document-row a { color: #93c5fd; text-decoration: none; font-weight: 600; }
+        .document-meta { color: #94a3b8; font-size: 11px; margin-top: 5px; }
+        .document-error { color: #fca5a5; font-size: 11px; margin-top: 5px; }
+        .status-badge { font-size: 10px; padding: 2px 7px; border-radius: 9px; margin-left: 6px; }
+        .status-indexed { background: #065f46; color: #6ee7b7; }
+        .status-stale, .status-unsupported { background: #78350f; color: #fcd34d; }
+        .status-failed, .status-removed { background: #7f1d1d; color: #fca5a5; }
+
         /* Welcome */
         .welcome {
             text-align: center;
@@ -280,6 +318,7 @@
     </div>
     <div class="header-actions">
         <span class="actor" id="actorLabel">Not signed in</span>
+        <button class="btn" onclick="toggleDocuments()">Documents</button>
         <button class="btn" onclick="toggleAudit()">Audit Log</button>
         <button class="btn btn-danger" onclick="clearChat()">Clear</button>
         <button class="btn" onclick="logout()">Logout</button>
@@ -327,6 +366,21 @@
 </main>
 </div>
 
+<!-- Documents Panel -->
+<div class="documents-panel" id="documentsPanel">
+    <div class="panel-header">
+        <h2>Drive Documents</h2>
+        <button class="btn" onclick="toggleDocuments()">Close</button>
+    </div>
+    <div class="panel-controls">
+        <button class="btn" id="syncDriveBtn" onclick="syncDrive('incremental')">Sync now</button>
+        <button class="btn" id="fullSyncDriveBtn" onclick="syncDrive('full')">Full re-index</button>
+        <button class="btn" onclick="loadDocuments()">Refresh</button>
+    </div>
+    <div class="documents-summary" id="documentsSummary">Loading...</div>
+    <div class="documents-body" id="documentsBody"></div>
+</div>
+
 <!-- Audit Panel -->
 <div class="audit-panel" id="auditPanel">
     <div class="panel-header">
@@ -344,6 +398,8 @@ let sessionId = sessionStorage.getItem(SESSION_ID_KEY) || '';
 let activeChatRequest = null;
 let sessionNavigationVersion = 0;
 let sessionNavigationInFlight = false;
+let currentActor = null;
+let documentsPollTimer = null;
 const API = '';
 
 function getToken() {
@@ -361,6 +417,7 @@ function showLogin(message = '') {
 }
 
 function setActor(user) {
+    currentActor = user;
     sessionStorage.setItem(ACTOR_STORAGE_KEY, JSON.stringify(user));
     document.getElementById('actorLabel').textContent = user.username + ' (' + user.role + ')';
     document.getElementById('loginPanel').style.display = 'none';
@@ -415,6 +472,8 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
 
 function logout(message = '') {
     cancelActiveChatRequest();
+    stopDocumentsPolling();
+    currentActor = null;
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
     sessionStorage.removeItem(ACTOR_STORAGE_KEY);
     document.getElementById('actorLabel').textContent = 'Not signed in';
@@ -426,7 +485,18 @@ function autoResize(el) {
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
-function addMessage(text, role, toolsUsed = []) {
+function safeDriveLink(value) {
+    try {
+        const url = new URL(value);
+        if (url.protocol !== 'https:') return '';
+        if (!['drive.google.com', 'docs.google.com'].includes(url.hostname)) return '';
+        return url.href;
+    } catch (_) {
+        return '';
+    }
+}
+
+function addMessage(text, role, toolsUsed = [], citations = []) {
     document.getElementById('welcome')?.remove();
 
     const container = document.getElementById('chatContainer');
@@ -444,6 +514,33 @@ function addMessage(text, role, toolsUsed = []) {
             badge.appendChild(tag);
         });
         div.appendChild(badge);
+    }
+
+    if (citations.length > 0) {
+        const list = document.createElement('div');
+        list.className = 'source-list';
+        citations.forEach(citation => {
+            const link = document.createElement('a');
+            link.className = 'source-card';
+            const safeLink = safeDriveLink(citation.web_view_link || '');
+            if (safeLink) {
+                link.href = safeLink;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+            }
+            const title = document.createElement('div');
+            title.className = 'source-title';
+            const locator = citation.page_number
+                ? 'page ' + citation.page_number
+                : (citation.section || 'document');
+            title.textContent = '[' + citation.id + '] ' + citation.source_name + ' · ' + locator;
+            const snippet = document.createElement('div');
+            snippet.className = 'source-snippet';
+            snippet.textContent = citation.snippet || '';
+            link.append(title, snippet);
+            list.appendChild(link);
+        });
+        div.appendChild(list);
     }
 
     container.appendChild(div);
@@ -495,6 +592,7 @@ function statusMessage(status) {
         read_file_tool: 'Reading file content...',
         save_memory: 'Saving to memory...',
         search_memory: 'Searching memory...',
+        search_drive_knowledge: 'Searching indexed Drive documents...',
     };
     if (status.stage === 'thinking') return 'Analyzing your request...';
     if (status.stage === 'tool_started') return toolMessages[status.tool] || `Running ${status.tool}...`;
@@ -546,7 +644,12 @@ async function loadHistory(targetSessionId = sessionId) {
     const data = await res.json();
     if (targetSessionId !== sessionId) return;
     showWelcome();
-    data.messages.forEach(message => addMessage(message.content, message.role));
+    data.messages.forEach(message => addMessage(
+        message.content,
+        message.role,
+        [],
+        message.citations || []
+    ));
 }
 
 function showWelcome() {
@@ -688,7 +791,12 @@ async function sendMessage() {
             if (activeChatRequest !== request || sessionId !== requestSessionId) return;
             if (event === 'status') setTyping(true, statusMessage(data));
             if (event === 'final') {
-                addMessage(data.response, 'assistant', data.tools_used || []);
+                addMessage(
+                    data.response,
+                    'assistant',
+                    data.tools_used || [],
+                    data.citations || []
+                );
                 completed = true;
             }
             if (event === 'error') throw new Error(data.message || 'Chat request failed');
@@ -714,11 +822,108 @@ async function clearChat() {
     showWelcome();
 }
 
+function stopDocumentsPolling() {
+    if (documentsPollTimer) clearTimeout(documentsPollTimer);
+    documentsPollTimer = null;
+}
+
+async function toggleDocuments() {
+    const panel = document.getElementById('documentsPanel');
+    panel.classList.toggle('open');
+    if (!panel.classList.contains('open')) {
+        stopDocumentsPolling();
+        return;
+    }
+    document.getElementById('auditPanel').classList.remove('open');
+    const canSync = (currentActor?.scopes || []).includes('drive:sync');
+    document.getElementById('syncDriveBtn').style.display = canSync ? '' : 'none';
+    document.getElementById('fullSyncDriveBtn').style.display = canSync ? '' : 'none';
+    await loadDocuments();
+}
+
+async function loadDocuments() {
+    if (!getToken()) return;
+    stopDocumentsPolling();
+    const summary = document.getElementById('documentsSummary');
+    const body = document.getElementById('documentsBody');
+    try {
+        const [statusResponse, documentsResponse] = await Promise.all([
+            authenticatedFetch('/api/drive/sync/status'),
+            authenticatedFetch('/api/drive/documents?limit=200'),
+        ]);
+        if (!statusResponse.ok || !documentsResponse.ok) throw new Error('Could not load documents');
+        const syncStatus = await statusResponse.json();
+        const documents = await documentsResponse.json();
+        const counts = syncStatus.documents || {};
+        const job = syncStatus.active_job;
+        summary.textContent = job
+            ? 'Sync ' + job.status + ' · ' + documents.total + ' files'
+            : 'Indexed ' + (counts.indexed || 0) + ' · stale ' + (counts.stale || 0)
+                + ' · failed ' + (counts.failed || 0) + ' · unsupported '
+                + (counts.unsupported || 0);
+        body.replaceChildren();
+        documents.documents.forEach(documentItem => {
+            const row = document.createElement('div');
+            row.className = 'document-row';
+            const safeLink = safeDriveLink(documentItem.web_view_link || '');
+            const title = safeLink ? document.createElement('a') : document.createElement('span');
+            if (safeLink) {
+                title.href = safeLink;
+                title.target = '_blank';
+                title.rel = 'noopener noreferrer';
+            }
+            title.textContent = documentItem.source_name;
+            const badge = document.createElement('span');
+            badge.className = 'status-badge status-' + documentItem.status;
+            badge.textContent = documentItem.status;
+            const meta = document.createElement('div');
+            meta.className = 'document-meta';
+            meta.textContent = (documentItem.page_count || 0) + ' pages · '
+                + (documentItem.chunk_count || 0) + ' chunks · '
+                + (documentItem.drive_path || 'Drive root');
+            row.append(title, badge, meta);
+            if (documentItem.error) {
+                const error = document.createElement('div');
+                error.className = 'document-error';
+                error.textContent = documentItem.error;
+                row.appendChild(error);
+            }
+            body.appendChild(row);
+        });
+        if (!documents.documents.length) body.textContent = 'No indexed documents yet.';
+        if (job && document.getElementById('documentsPanel').classList.contains('open')) {
+            documentsPollTimer = setTimeout(loadDocuments, 2000);
+        }
+    } catch (error) {
+        summary.textContent = error.message;
+        body.replaceChildren();
+    }
+}
+
+async function syncDrive(mode) {
+    const summary = document.getElementById('documentsSummary');
+    try {
+        const response = await authenticatedFetch('/api/drive/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail?.code || data.detail || 'Could not start sync');
+        }
+        await loadDocuments();
+    } catch (error) {
+        summary.textContent = error.message;
+    }
+}
+
 async function toggleAudit() {
     const panel = document.getElementById('auditPanel');
     panel.classList.toggle('open');
-
     if (panel.classList.contains('open')) {
+        document.getElementById('documentsPanel').classList.remove('open');
+        stopDocumentsPolling();
         if (!getToken()) return showLogin();
         try {
             const res = await authenticatedFetch('/audit?session_id=' + encodeURIComponent(sessionId));
