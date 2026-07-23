@@ -12,6 +12,9 @@ from services.chunking import DocumentChunk, chunk_document
 from services.documents import get_document_cache
 
 MAX_TOP_K = 10
+MAX_LIST_LIMIT = 50
+MAX_LIST_SCAN = 500
+MEMORY_PREVIEW_CHARS = 160
 PUBLIC_METADATA_KEYS = (
     "source_type",
     "source_name",
@@ -195,6 +198,84 @@ def search_memory(
     }
 
 
+def _memory_type_for_source(source_type: str) -> str:
+    if source_type in {"document", "drive_file"}:
+        return "document"
+    if source_type == "task":
+        return "task"
+    return "fact"
+
+
+def list_saved_memories(
+    memory_type: str = "all",
+    limit: int = 20,
+) -> dict:
+    """List user-owned memories without running a semantic search."""
+    allowed_memory_types = {"all", "fact", "document", "task"}
+    if memory_type not in allowed_memory_types:
+        raise ValueError(
+            f"memory_type must be one of: {', '.join(sorted(allowed_memory_types))}"
+        )
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_LIST_LIMIT:
+        raise ValueError(f"limit must be an integer between 1 and {MAX_LIST_LIMIT}")
+
+    actor = get_current_actor()
+    chunks = vectorstore.list_all_memories(
+        limit=MAX_LIST_SCAN,
+        user_id=actor["user_id"],
+    )
+    grouped: dict[str, dict] = {}
+    for chunk in chunks:
+        metadata = chunk.get("metadata", {})
+        normalized_type = _memory_type_for_source(
+            str(metadata.get("source_type", "fact"))
+        )
+        if memory_type != "all" and normalized_type != memory_type:
+            continue
+
+        memory_id = str(metadata.get("memory_id") or chunk.get("id", ""))
+        summary = grouped.setdefault(
+            memory_id,
+            {
+                "memory_id": memory_id,
+                "memory_type": normalized_type,
+                "source_name": str(metadata.get("source_name", "")),
+                "category": str(metadata.get("category", "")),
+                "created_at": str(metadata.get("created_at", "")),
+                "chunk_count": 1,
+                "content_preview": "",
+                "_preview_chunk_index": None,
+            },
+        )
+        declared_count = metadata.get("chunk_count", 1)
+        if isinstance(declared_count, int) and not isinstance(declared_count, bool):
+            summary["chunk_count"] = max(summary["chunk_count"], declared_count)
+
+        chunk_index = metadata.get("chunk_index", 0)
+        if not isinstance(chunk_index, int) or isinstance(chunk_index, bool):
+            chunk_index = 0
+        preview_index = summary["_preview_chunk_index"]
+        if preview_index is None or chunk_index < preview_index:
+            summary["_preview_chunk_index"] = chunk_index
+            normalized_text = " ".join(str(chunk.get("text", "")).split())
+            summary["content_preview"] = normalized_text[:MEMORY_PREVIEW_CHARS]
+
+    summaries = [
+        {key: value for key, value in summary.items() if not key.startswith("_")}
+        for summary in grouped.values()
+    ]
+    summaries.sort(key=lambda item: item["memory_id"])
+    summaries.sort(key=lambda item: item["created_at"], reverse=True)
+    limited = summaries[:limit]
+    return {
+        "status": "found" if limited else "empty",
+        "memory_type": memory_type,
+        "results_count": len(limited),
+        "has_more": len(summaries) > len(limited),
+        "memories": limited,
+    }
+
+
 save_memory_tool = ToolDefinition(
     name="save_memory",
     description=(
@@ -260,4 +341,33 @@ search_memory_tool = ToolDefinition(
 )
 
 
-ALL_MEMORY_TOOLS = [save_memory_tool, search_memory_tool]
+list_saved_memories_tool = ToolDefinition(
+    name="list_saved_memories",
+    description=(
+        "List facts, tasks, and document sources saved in the authenticated user's memory. "
+        "Use this when the user asks what is remembered or which documents are saved."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "memory_type": {
+                "type": "string",
+                "enum": ["all", "fact", "document", "task"],
+                "description": "Optional memory kind to list.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_LIST_LIMIT,
+                "description": "Maximum number of memory summaries to return.",
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    required_scopes=["memory:read"],
+    handler=list_saved_memories,
+)
+
+
+ALL_MEMORY_TOOLS = [save_memory_tool, search_memory_tool, list_saved_memories_tool]

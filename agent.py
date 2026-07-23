@@ -37,6 +37,8 @@ Tool rules:
 - When the user asks to save a file that was just read, use save_memory with document_ref from read_file_tool.
 - Long-term memory is scoped to the authenticated user, not the chat session. Starting a new chat
   does not clear saved memory.
+- When the user asks what is remembered or which documents are saved, use list_saved_memories.
+  Use search_memory instead when the user asks a semantic question about saved information.
 - Before answering explicit saved preferences, use search_memory with memory_type=fact.
 - For identity or profile questions such as name, education, experience, or skills, use
   search_memory with memory_type=all because the answer may be a fact or in a saved profile/CV.

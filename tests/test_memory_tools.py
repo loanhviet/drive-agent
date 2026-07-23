@@ -211,3 +211,164 @@ def test_registry_blocks_memory_write_for_read_only_user(memory_environment):
 
     assert result["ok"] is False
     assert result["error"]["code"] == "missing_scope"
+
+
+def test_list_saved_memories_groups_chunks_and_sorts_newest_first(memory_environment):
+    store = memory_environment["store"]
+    store.save_memories(
+        [
+            (
+                "second document chunk",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": "document-memory",
+                    "source_type": "drive_file",
+                    "source_name": "Guide.pdf",
+                    "category": "document",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "chunk_index": 1,
+                    "chunk_count": 2,
+                },
+            ),
+            (
+                "first\n document   chunk",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": "document-memory",
+                    "source_type": "drive_file",
+                    "source_name": "Guide.pdf",
+                    "category": "document",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "chunk_index": 0,
+                    "chunk_count": 2,
+                },
+            ),
+            (
+                "I prefer Python",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": "fact-memory",
+                    "source_type": "fact",
+                    "category": "preference",
+                    "created_at": "2026-02-01T00:00:00+00:00",
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                },
+            ),
+        ]
+    )
+
+    with execution_context(actor()):
+        result = memory.list_saved_memories()
+
+    assert result["status"] == "found"
+    assert result["results_count"] == 2
+    assert result["has_more"] is False
+    assert [item["memory_id"] for item in result["memories"]] == [
+        "fact-memory",
+        "document-memory",
+    ]
+    document = result["memories"][1]
+    assert document == {
+        "memory_id": "document-memory",
+        "memory_type": "document",
+        "source_name": "Guide.pdf",
+        "category": "document",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "chunk_count": 2,
+        "content_preview": "first document chunk",
+    }
+
+
+def test_list_saved_memories_filters_type_and_applies_limit(memory_environment):
+    store = memory_environment["store"]
+    store.save_memories(
+        [
+            (
+                text,
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": memory_id,
+                    "source_type": source_type,
+                    "created_at": created_at,
+                },
+            )
+            for text, memory_id, source_type, created_at in [
+                ("older document", "document-1", "document", "2026-01-01"),
+                ("newer document", "document-2", "drive_file", "2026-02-01"),
+                ("saved task", "task-1", "task", "2026-03-01"),
+            ]
+        ]
+    )
+
+    with execution_context(actor()):
+        result = memory.list_saved_memories(memory_type="document", limit=1)
+
+    assert result["memory_type"] == "document"
+    assert result["results_count"] == 1
+    assert result["has_more"] is True
+    assert result["memories"][0]["memory_id"] == "document-2"
+
+
+def test_list_saved_memories_is_tenant_scoped(memory_environment):
+    store = memory_environment["store"]
+    store.save_memories(
+        [
+            (
+                "visible",
+                [1.0, 0.0, 0.0],
+                {"user_id": "user-1", "memory_id": "visible", "source_type": "fact"},
+            ),
+            (
+                "private",
+                [1.0, 0.0, 0.0],
+                {"user_id": "user-2", "memory_id": "private", "source_type": "fact"},
+            ),
+        ]
+    )
+
+    with execution_context(actor("user-1")):
+        result = memory.list_saved_memories()
+
+    assert [item["memory_id"] for item in result["memories"]] == ["visible"]
+    assert "private" not in str(result)
+
+
+def test_list_saved_memories_reports_empty_store(memory_environment):
+    with execution_context(actor()):
+        result = memory.list_saved_memories()
+
+    assert result == {
+        "status": "empty",
+        "memory_type": "all",
+        "results_count": 0,
+        "has_more": False,
+        "memories": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("memory_type", "limit"),
+    [("unknown", 20), ("all", 0), ("all", 51), ("all", True)],
+)
+def test_list_saved_memories_validates_input(memory_environment, memory_type, limit):
+    with execution_context(actor()):
+        with pytest.raises(ValueError):
+            memory.list_saved_memories(memory_type=memory_type, limit=limit)
+
+
+def test_list_saved_memories_tool_requires_memory_read_scope(memory_environment, tmp_path):
+    registry = ToolRegistry(
+        authenticator=lambda _token: actor(scopes=["memory:write"]),
+        audit_store=None,
+    )
+    registry.register(memory.list_saved_memories_tool)
+
+    result = registry.call("list_saved_memories", {}, "token")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "missing_scope"

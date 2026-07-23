@@ -148,6 +148,7 @@ def test_system_prompt_searches_all_memory_for_identity_profile_questions():
     assert "try another memory_type" in SYSTEM_PROMPT
     assert "read_document_segment" in SYSTEM_PROMPT
     assert "next_offset" in SYSTEM_PROMPT
+    assert "list_saved_memories" in SYSTEM_PROMPT
 
 
 def test_offline_drive_document_memory_workflow(monkeypatch, tmp_path):
