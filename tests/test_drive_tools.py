@@ -338,3 +338,103 @@ def test_walk_files_recurses_and_tracks_drive_path(monkeypatch):
         ("root-file", "Root.txt"),
         ("nested-file", "Folder A/Nested.pdf"),
     ]
+
+
+def test_search_files_matches_normalized_name_tokens_in_nested_folder(monkeypatch):
+    candidates = [
+        {
+            "id": "report",
+            "name": "Báo-Cáo Tuyển Dụng 2026.pdf",
+            "mimeType": "application/pdf",
+            "drive_path": "HR/Báo-Cáo Tuyển Dụng 2026.pdf",
+        },
+        {
+            "id": "notes",
+            "name": "Meeting notes.txt",
+            "mimeType": "text/plain",
+            "drive_path": "Meeting notes.txt",
+        },
+    ]
+    seen_roots = []
+
+    def walk_files(folder_id):
+        seen_roots.append(folder_id)
+        return candidates
+
+    monkeypatch.setattr(drive_service, "walk_files", walk_files)
+
+    result = drive_service.search_files(
+        "bao cao 2026",
+        folder_id="root-folder",
+    )
+
+    assert seen_roots == ["root-folder"]
+    assert [item["id"] for item in result] == ["report"]
+
+
+def test_search_files_uses_configured_root_and_applies_limit(monkeypatch):
+    monkeypatch.setattr(drive_service, "GOOGLE_DRIVE_FOLDER_ID", "configured-root")
+    monkeypatch.setattr(
+        drive_service,
+        "walk_files",
+        lambda folder_id: [
+            {"id": "first", "name": "Plan alpha.md"},
+            {"id": "second", "name": "Plan beta.md"},
+        ]
+        if folder_id == "configured-root"
+        else [],
+    )
+
+    result = drive_service.search_files("plan", limit=1)
+
+    assert [item["id"] for item in result] == ["first"]
+
+
+@pytest.mark.parametrize(
+    ("query", "limit"),
+    [("", 20), ("---", 20), ("report", 0), ("report", 51), ("report", True)],
+)
+def test_search_files_validates_input(monkeypatch, query, limit):
+    monkeypatch.setattr(drive_service, "GOOGLE_DRIVE_FOLDER_ID", "")
+
+    with pytest.raises(ValueError):
+        drive_service.search_files(query, limit=limit)
+
+
+def test_search_drive_files_tool_returns_bounded_metadata(monkeypatch):
+    monkeypatch.setattr(
+        google_drive.drive_service,
+        "search_files",
+        lambda query, folder_id, limit: [
+            {"id": "match", "name": "Matched.pdf", "drive_path": "Docs/Matched.pdf"}
+        ],
+    )
+
+    result = google_drive.search_drive_files("matched", folder_id="root", limit=3)
+
+    assert result == {
+        "status": "found",
+        "query": "matched",
+        "results_count": 1,
+        "files": [
+            {"id": "match", "name": "Matched.pdf", "drive_path": "Docs/Matched.pdf"}
+        ],
+    }
+
+
+def test_search_drive_files_tool_requires_drive_read_scope(monkeypatch, tmp_path):
+    monkeypatch.setattr(google_drive.drive_service, "search_files", lambda *args, **kwargs: [])
+    registry = ToolRegistry(
+        authenticator=lambda _token: {
+            "user_id": "user-1",
+            "role": "user",
+            "scopes": [],
+        },
+        audit_store=AuditStore(str(tmp_path / "audit-search.db")),
+    )
+    registry.register(google_drive.search_files_tool)
+
+    result = registry.call("search_drive_files", {"query": "report"}, "token")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "missing_scope"

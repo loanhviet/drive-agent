@@ -4,7 +4,9 @@ Supports listing, recursively discovering, and downloading file content.
 """
 
 import os
+import re
 import tempfile
+import unicodedata
 from collections import deque
 
 from google.oauth2 import service_account
@@ -113,6 +115,45 @@ def walk_files(folder_id: str, page_size: int = 1000) -> list[dict]:
                 continue
             discovered.append({**item, "drive_path": drive_path})
     return discovered
+
+
+def _normalized_name_tokens(value: str) -> list[str]:
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFD", value.casefold())
+        if unicodedata.category(character) != "Mn"
+    )
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def search_files(
+    query: str,
+    *,
+    folder_id: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Search file names within the configured Drive scope."""
+    if not query or not query.strip():
+        raise ValueError("query must not be empty")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer between 1 and 50")
+
+    query_tokens = _normalized_name_tokens(query)
+    if not query_tokens:
+        raise ValueError("query must contain searchable letters or numbers")
+
+    root_folder_id = (folder_id or GOOGLE_DRIVE_FOLDER_ID).strip()
+    candidates = walk_files(root_folder_id) if root_folder_id else list_files()
+    matches = []
+    for item in candidates:
+        searchable_name = " ".join(
+            _normalized_name_tokens(str(item.get("name", "")))
+        )
+        if all(token in searchable_name for token in query_tokens):
+            matches.append(item)
+            if len(matches) >= limit:
+                break
+    return matches
 
 
 def download_file(file_id: str, max_bytes: int = DRIVE_MAX_FILE_BYTES) -> dict:

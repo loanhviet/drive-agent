@@ -46,7 +46,64 @@ list_files_tool = ToolDefinition(
 
 
 # ============================================================
-# Tool 2: DOWNLOAD DRIVE FILE
+# Tool 2: SEARCH DRIVE FILES
+# ============================================================
+
+def search_drive_files(
+    query: str,
+    folder_id: str = "",
+    limit: int = 20,
+) -> dict:
+    """Search for Drive files by normalized file-name tokens."""
+    files = drive_service.search_files(
+        query,
+        folder_id=folder_id or None,
+        limit=limit,
+    )
+    return {
+        "status": "found" if files else "not_found",
+        "query": query.strip(),
+        "results_count": len(files),
+        "files": files,
+    }
+
+
+search_files_tool = ToolDefinition(
+    name="search_drive_files",
+    description=(
+        "Search Google Drive files by file name without reading their content. "
+        "Matching is case-insensitive and accent-insensitive. "
+        "Optionally provide a folder_id to search recursively within that folder."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "File-name words to search for.",
+            },
+            "folder_id": {
+                "type": "string",
+                "description": "Optional Drive folder ID. Defaults to the configured folder.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Maximum number of matching files to return.",
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+    required_scopes=["drive:read"],
+    handler=search_drive_files,
+)
+
+
+# ============================================================
+# Tool 3: DOWNLOAD DRIVE FILE
 # ============================================================
 
 def get_drive_file(file_id: str) -> dict:
@@ -88,4 +145,4 @@ get_drive_file_tool = ToolDefinition(
 )
 
 
-ALL_DRIVE_TOOLS = [list_files_tool, get_drive_file_tool]
+ALL_DRIVE_TOOLS = [list_files_tool, search_files_tool, get_drive_file_tool]
