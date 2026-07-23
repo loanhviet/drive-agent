@@ -29,8 +29,10 @@ Tool rules:
   search_drive_knowledge instead of downloading or saving the file again.
 - Claims from search_drive_knowledge must use its exact citation IDs such as [S1]. If returned
   chunks do not directly answer the question, say the indexed Drive corpus has insufficient data.
-- read_file_tool may return only a preview when is_truncated is true. In that case, clearly say
-  that only a preview was read; never claim the preview is the complete document.
+- read_file_tool may return only a preview when is_truncated is true. Use read_document_segment
+  with its document_ref and next_offset to read any later content needed for the answer. Continue
+  with each returned next_offset until enough evidence is found or next_offset is null; never claim
+  a partial read is the complete document.
 - When the user explicitly asks you to remember a fact, use save_memory with content.
 - When the user asks to save a file that was just read, use save_memory with document_ref from read_file_tool.
 - Long-term memory is scoped to the authenticated user, not the chat session. Starting a new chat

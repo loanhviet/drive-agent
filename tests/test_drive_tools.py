@@ -238,6 +238,7 @@ def test_reader_limits_llm_preview_but_caches_full_document(monkeypatch, tmp_pat
     assert result["content"] == "01234"
     assert result["total_chars"] == 10
     assert result["is_truncated"] is True
+    assert result["next_offset"] == 5
     assert document_cache.get(result["document_ref"], "user-1").content == "0123456789"
     assert not temporary_file.exists()
 
@@ -438,3 +439,107 @@ def test_search_drive_files_tool_requires_drive_read_scope(monkeypatch, tmp_path
 
     assert result["ok"] is False
     assert result["error"]["code"] == "missing_scope"
+
+
+def test_read_document_segment_paginates_without_consuming_cache(monkeypatch):
+    document_cache = DocumentCache()
+    document = document_cache.put(
+        "user-1",
+        "0123456789",
+        {
+            "file_id": "file-1",
+            "file_name": "numbers.txt",
+            "mime_type": "text/plain",
+        },
+    )
+    monkeypatch.setattr(read_file_module, "get_document_cache", lambda: document_cache)
+
+    with execution_context(actor()):
+        first = read_file_module.read_document_segment(
+            document.document_ref,
+            offset=0,
+            max_chars=4,
+        )
+        final = read_file_module.read_document_segment(
+            document.document_ref,
+            offset=8,
+            max_chars=4,
+        )
+
+    assert first == {
+        "document_ref": document.document_ref,
+        "file_id": "file-1",
+        "file_name": "numbers.txt",
+        "mime_type": "text/plain",
+        "content": "0123",
+        "offset": 0,
+        "end_offset": 4,
+        "total_chars": 10,
+        "is_truncated": True,
+        "next_offset": 4,
+    }
+    assert final["content"] == "89"
+    assert final["end_offset"] == 10
+    assert final["is_truncated"] is False
+    assert final["next_offset"] is None
+    assert document_cache.get(document.document_ref, "user-1") == document
+
+
+@pytest.mark.parametrize(
+    ("offset", "max_chars", "message"),
+    [
+        (-1, 4, "offset"),
+        (True, 4, "offset"),
+        (10, 4, "offset"),
+        (0, 0, "max_chars"),
+        (0, read_file_module.FILE_PREVIEW_CHARS + 1, "max_chars"),
+        (0, True, "max_chars"),
+    ],
+)
+def test_read_document_segment_validates_bounds(
+    monkeypatch,
+    offset,
+    max_chars,
+    message,
+):
+    document_cache = DocumentCache()
+    document = document_cache.put("user-1", "0123456789", {})
+    monkeypatch.setattr(read_file_module, "get_document_cache", lambda: document_cache)
+
+    with execution_context(actor()):
+        with pytest.raises(ValueError, match=message):
+            read_file_module.read_document_segment(
+                document.document_ref,
+                offset=offset,
+                max_chars=max_chars,
+            )
+
+
+def test_read_document_segment_rejects_another_user(monkeypatch):
+    document_cache = DocumentCache()
+    document = document_cache.put("owner", "private document", {})
+    monkeypatch.setattr(read_file_module, "get_document_cache", lambda: document_cache)
+
+    with execution_context(actor("other-user")):
+        with pytest.raises(ValueError, match="does not belong"):
+            read_file_module.read_document_segment(
+                document.document_ref,
+                offset=0,
+                max_chars=4,
+            )
+
+
+def test_read_document_segment_rejects_expired_reference(monkeypatch):
+    clock = [0.0]
+    document_cache = DocumentCache(ttl_seconds=10, clock=lambda: clock[0])
+    document = document_cache.put("user-1", "temporary document", {})
+    monkeypatch.setattr(read_file_module, "get_document_cache", lambda: document_cache)
+    clock[0] = 11.0
+
+    with execution_context(actor()):
+        with pytest.raises(ValueError, match="not found or has expired"):
+            read_file_module.read_document_segment(
+                document.document_ref,
+                offset=0,
+                max_chars=4,
+            )
