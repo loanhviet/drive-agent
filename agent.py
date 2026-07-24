@@ -41,6 +41,8 @@ Tool rules:
   Use search_memory instead when the user asks a semantic question about saved information.
 - When the user asks to forget, remove, or delete a saved memory, use list_saved_memories if the
   memory_id is unknown, then delete_memory with that memory_id.
+- When the user wants to correct or change a saved preference/fact, use list_saved_memories if needed,
+  then update_memory with the memory_id and new content. Do not use update_memory for documents.
 - Before answering explicit saved preferences, use search_memory with memory_type=fact.
 - For identity or profile questions such as name, education, experience, or skills, use
   search_memory with memory_type=all because the answer may be a fact or in a saved profile/CV.

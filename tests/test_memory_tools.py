@@ -23,7 +23,11 @@ class SemanticFakeProvider:
         vectors = []
         for text in texts:
             lower = text.lower()
-            if "python" in lower or "ngôn ngữ" in lower:
+            if (
+                "python" in lower
+                or "typescript" in lower
+                or "ngôn ngữ" in lower
+            ):
                 vectors.append([1.0, 0.0, 0.0])
             elif "quantum_middle_concept" in lower or "quantum" in lower:
                 vectors.append([0.0, 1.0, 0.0])
@@ -461,6 +465,106 @@ def test_delete_memory_tool_requires_memory_write_scope(memory_environment):
     registry.register(memory.delete_memory_tool)
 
     result = registry.call("delete_memory", {"memory_id": "any"}, "token")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "missing_scope"
+
+
+def test_update_memory_supersedes_fact_and_keeps_memory_id(memory_environment):
+    with execution_context(actor()):
+        saved = memory.save_memory(content="Tôi thích Python", category="user_preference")
+        updated = memory.update_memory(
+            saved["memory_id"],
+            content="Tôi thích TypeScript",
+            category="user_preference",
+        )
+        found = memory.search_memory("Tôi thích ngôn ngữ gì?")
+        listed = memory.list_saved_memories()
+
+    assert updated["status"] == "updated"
+    assert updated["memory_id"] == saved["memory_id"]
+    assert updated["content_preview"] == "Tôi thích TypeScript"
+    assert found["status"] == "found"
+    assert found["memories"][0]["text"] == "Tôi thích TypeScript"
+    assert listed["results_count"] == 1
+    assert listed["memories"][0]["memory_id"] == saved["memory_id"]
+    remaining = memory_environment["store"].list_memory_points("user-1", saved["memory_id"])
+    assert len(remaining) == 1
+    assert remaining[0]["metadata"]["updated_at"]
+    assert remaining[0]["metadata"]["created_at"]
+
+
+def test_update_memory_rejects_documents(monkeypatch, memory_environment):
+    documents = memory_environment["documents"]
+    document = documents.put(
+        "user-1",
+        "full document content",
+        {"file_id": "drive-file", "file_name": "notes.txt", "source_type": "drive_file"},
+    )
+    monkeypatch.setattr(
+        memory,
+        "chunk_document",
+        lambda _content: [
+            DocumentChunk("introduction", 0, 0, 12, "Introduction"),
+            DocumentChunk("body", 1, 13, 17, "Body"),
+        ],
+    )
+
+    with execution_context(actor()):
+        saved = memory.save_memory(document_ref=document.document_ref, category="document")
+        result = memory.update_memory(saved["memory_id"], content="replacement text")
+
+    assert result["status"] == "unsupported_type"
+    remaining = memory_environment["store"].list_memory_points("user-1", saved["memory_id"])
+    assert len(remaining) == 2
+
+
+def test_update_memory_not_found_and_tenant_isolation(memory_environment):
+    store = memory_environment["store"]
+    store.save_memories(
+        [
+            (
+                "private",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-2",
+                    "memory_id": "private-memory",
+                    "source_type": "fact",
+                    "category": "general",
+                },
+            ),
+        ]
+    )
+
+    with execution_context(actor("user-1")):
+        missing = memory.update_memory("does-not-exist", content="new text")
+        blocked = memory.update_memory("private-memory", content="hijack")
+
+    assert missing["status"] == "not_found"
+    assert blocked["status"] == "not_found"
+    assert len(store.list_memory_points("user-2", "private-memory")) == 1
+
+
+def test_update_memory_validates_inputs(memory_environment):
+    with execution_context(actor()):
+        with pytest.raises(ValueError, match="memory_id"):
+            memory.update_memory("  ", content="ok")
+        with pytest.raises(ValueError, match="content"):
+            memory.update_memory("some-id", content="  ")
+
+
+def test_update_memory_tool_requires_memory_write_scope(memory_environment):
+    registry = ToolRegistry(
+        authenticator=lambda _token: actor(scopes=["memory:read"]),
+        audit_store=None,
+    )
+    registry.register(memory.update_memory_tool)
+
+    result = registry.call(
+        "update_memory",
+        {"memory_id": "any", "content": "new"},
+        "token",
+    )
 
     assert result["ok"] is False
     assert result["error"]["code"] == "missing_scope"

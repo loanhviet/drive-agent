@@ -293,6 +293,94 @@ def delete_memory(memory_id: str) -> dict:
     }
 
 
+def update_memory(
+    memory_id: str,
+    content: str,
+    category: str | None = None,
+) -> dict:
+    """Replace a saved fact/task in place. Document memories must be deleted and re-saved."""
+    if not memory_id or not str(memory_id).strip():
+        raise ValueError("memory_id must not be empty")
+    if not content or not str(content).strip():
+        raise ValueError("content must not be empty")
+    memory_id = str(memory_id).strip()
+    raw_content = str(content).strip()
+
+    actor = get_current_actor()
+    user_id = actor["user_id"]
+    points = vectorstore.list_memory_points(user_id, memory_id)
+    if not points:
+        return {"status": "not_found", "memory_id": memory_id}
+
+    source_types = {
+        str(point.get("metadata", {}).get("source_type", "fact")) for point in points
+    }
+    if source_types & {"document", "drive_file"}:
+        return {
+            "status": "unsupported_type",
+            "memory_id": memory_id,
+            "message": (
+                "Document memories cannot be updated in place. "
+                "Delete the memory and save the document again."
+            ),
+        }
+    if not source_types.issubset({"fact", "task"}):
+        return {
+            "status": "unsupported_type",
+            "memory_id": memory_id,
+            "message": "Only fact and task memories can be updated.",
+        }
+
+    existing = points[0].get("metadata", {})
+    source_type = str(existing.get("source_type", "fact"))
+    if source_type not in {"fact", "task"}:
+        source_type = "fact"
+    resolved_category = (
+        category.strip()
+        if isinstance(category, str) and category.strip()
+        else str(existing.get("category", "general") or "general")
+    )
+    content_hash = _content_hash(raw_content)
+    now = datetime.now(timezone.utc).isoformat()
+    created_at = str(existing.get("created_at") or now)
+
+    vectorstore.delete_by_memory_id(user_id, memory_id)
+    vectors = embedding.embed_texts([raw_content])
+    if len(vectors) != 1:
+        raise RuntimeError("Embedding provider returned incomplete fact vectors")
+    vectorstore.save_memories(
+        [
+            (
+                raw_content,
+                vectors[0],
+                {
+                    "memory_id": memory_id,
+                    "source_type": source_type,
+                    "source_name": str(existing.get("source_name", "") or ""),
+                    "file_id": str(existing.get("file_id", "") or ""),
+                    "category": resolved_category,
+                    "content_hash": content_hash,
+                    "created_at": created_at,
+                    "updated_at": now,
+                    "user_id": user_id,
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "start_char": 0,
+                    "end_char": len(raw_content),
+                    "section": "",
+                },
+            )
+        ]
+    )
+    return {
+        "status": "updated",
+        "memory_id": memory_id,
+        "content_preview": raw_content[:MEMORY_PREVIEW_CHARS],
+        "category": resolved_category,
+        "source_type": source_type,
+    }
+
+
 save_memory_tool = ToolDefinition(
     name="save_memory",
     description=(
@@ -411,9 +499,43 @@ delete_memory_tool = ToolDefinition(
 )
 
 
+update_memory_tool = ToolDefinition(
+    name="update_memory",
+    description=(
+        "Update a previously saved fact or task by memory_id, keeping the same memory_id. "
+        "Use list_saved_memories first when the id is unknown. Document memories cannot be "
+        "updated in place — delete them and save again."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "memory_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "memory_id of the fact or task to update.",
+            },
+            "content": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Replacement fact or task text.",
+            },
+            "category": {
+                "type": "string",
+                "description": "Optional new category; defaults to the existing category.",
+            },
+        },
+        "required": ["memory_id", "content"],
+        "additionalProperties": False,
+    },
+    required_scopes=["memory:write"],
+    handler=update_memory,
+)
+
+
 ALL_MEMORY_TOOLS = [
     save_memory_tool,
     search_memory_tool,
     list_saved_memories_tool,
     delete_memory_tool,
+    update_memory_tool,
 ]
