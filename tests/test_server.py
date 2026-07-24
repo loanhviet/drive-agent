@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from registry.models import ToolDefinition
 from registry.registry import ToolRegistry
@@ -12,6 +14,39 @@ async def test_health_does_not_require_external_services(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "port": 9004}
+
+
+@pytest.mark.anyio
+async def test_request_id_echoes_valid_client_header(client):
+    response = await client.get(
+        "/api/health",
+        headers={"X-Request-ID": "demo-request-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "demo-request-1"
+
+
+@pytest.mark.anyio
+async def test_request_id_is_generated_when_missing(client):
+    response = await client.get("/api/health")
+
+    assert response.status_code == 200
+    request_id = response.headers["X-Request-ID"]
+    assert re.fullmatch(r"[0-9a-f]{32}", request_id)
+
+
+@pytest.mark.anyio
+async def test_request_id_rejects_unsafe_client_value(client):
+    response = await client.get(
+        "/api/health",
+        headers={"X-Request-ID": "bad id with spaces!"},
+    )
+
+    assert response.status_code == 200
+    request_id = response.headers["X-Request-ID"]
+    assert request_id != "bad id with spaces!"
+    assert re.fullmatch(r"[0-9a-f]{32}", request_id)
 
 
 @pytest.mark.anyio

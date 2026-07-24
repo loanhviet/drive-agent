@@ -7,17 +7,20 @@ from contextlib import asynccontextmanager
 import json
 import os
 from queue import Empty, Queue
+import re
 import traceback
+import uuid
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Annotated
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from agent import Agent
 from config import GOOGLE_DRIVE_FOLDER_ID, GOOGLE_SERVICE_ACCOUNT_FILE
@@ -42,12 +45,36 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="AI Agent - Assignment 1", lifespan=lifespan)
 STATIC_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
+REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def resolve_request_id(raw_value: str | None) -> str:
+    """Accept a safe client id or generate a server-side uuid hex."""
+    if raw_value is not None:
+        candidate = raw_value.strip()
+        if _REQUEST_ID_PATTERN.fullmatch(candidate):
+            return candidate
+    return uuid.uuid4().hex
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[REQUEST_ID_HEADER],
 )
+app.add_middleware(RequestIdMiddleware)
 
 # Per-session agents, isolated by authenticated actor.
 sessions: dict[tuple[str, str], Agent] = {}

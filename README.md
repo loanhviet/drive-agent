@@ -16,7 +16,8 @@ The project is under active development, with ongoing work focused on reliabilit
 - A shared Qdrant document corpus with revision activation, removal, and page/section citations.
 - A Documents panel for sync status, indexed-file health, and safe links back to Drive.
 - MarkItDown extraction with a bounded preview and temporary `document_ref` for full-document ingestion.
-- User-scoped fact and document memory in Qdrant using dense-vector retrieval.
+- User-scoped fact and document memory in Qdrant using dense-vector retrieval, with list, update, and delete tools.
+- Request correlation via `X-Request-ID` on every API response.
 - SQLite persistence for users, chat sessions, completed messages, and audit records.
 - Audit argument redaction and separate role scopes for Drive and memory access.
 - Offline deterministic tests, Ruff checks, and an 85% CI coverage threshold.
@@ -66,7 +67,7 @@ Most requests use the configured LLM for tool selection. Explicit Drive-list req
 
 - This is a single-process demo, not a production-ready service.
 - Agent instances, short-lived artifact/document caches, and rate-limit buckets are held in process memory; ingestion jobs are durable.
-- `/api/health` only checks the web process and does not verify LLM, Drive, embedding, or Qdrant readiness.
+- `/api/health` only checks the web process; use `/api/ready` for dependency checks. Neither calls paid LLM providers.
 - Retrieval is dense-vector search only.
 - An eval runner is included, but a reviewed project-specific dataset must be created before its metrics are release evidence.
 - Shared-document retrieval is dense-vector search only; there is no hybrid search or reranking.
