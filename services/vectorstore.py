@@ -272,6 +272,45 @@ class VectorStore:
             for point in points
         ]
 
+    def list_memory_points(self, user_id: str, memory_id: str) -> list[dict[str, Any]]:
+        """Return all points for a user-owned memory_id (facts or multi-chunk docs)."""
+        if not user_id or not memory_id:
+            return []
+        self.ensure_collection()
+        points, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="memory_id", match=MatchValue(value=memory_id)),
+                ]
+            ),
+            limit=500,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [
+            {
+                "id": str(point.id),
+                "text": point.payload.get("text", ""),
+                "metadata": {key: value for key, value in point.payload.items() if key != "text"},
+            }
+            for point in points
+        ]
+
+    def delete_by_memory_id(self, user_id: str, memory_id: str) -> int:
+        """Delete all points for a user-owned memory_id. Returns points deleted."""
+        points = self.list_memory_points(user_id, memory_id)
+        if not points:
+            return 0
+        point_ids = [point["id"] for point in points]
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=point_ids,
+            wait=True,
+        )
+        return len(point_ids)
+
 
 _store: VectorStore | None = None
 
@@ -338,3 +377,11 @@ def has_content_hash(user_id: str, content_hash: str) -> bool:
 
 def list_all_memories(limit: int = 100, user_id: str | None = None) -> list[dict[str, Any]]:
     return get_vector_store().list_all_memories(limit, user_id)
+
+
+def list_memory_points(user_id: str, memory_id: str) -> list[dict[str, Any]]:
+    return get_vector_store().list_memory_points(user_id, memory_id)
+
+
+def delete_by_memory_id(user_id: str, memory_id: str) -> int:
+    return get_vector_store().delete_by_memory_id(user_id, memory_id)

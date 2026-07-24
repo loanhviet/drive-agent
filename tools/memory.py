@@ -276,6 +276,23 @@ def list_saved_memories(
     }
 
 
+def delete_memory(memory_id: str) -> dict:
+    """Delete all chunks of a user-owned memory by memory_id."""
+    if not memory_id or not str(memory_id).strip():
+        raise ValueError("memory_id must not be empty")
+    memory_id = str(memory_id).strip()
+
+    actor = get_current_actor()
+    points_deleted = vectorstore.delete_by_memory_id(actor["user_id"], memory_id)
+    if points_deleted == 0:
+        return {"status": "not_found", "memory_id": memory_id, "points_deleted": 0}
+    return {
+        "status": "deleted",
+        "memory_id": memory_id,
+        "points_deleted": points_deleted,
+    }
+
+
 save_memory_tool = ToolDefinition(
     name="save_memory",
     description=(
@@ -370,4 +387,33 @@ list_saved_memories_tool = ToolDefinition(
 )
 
 
-ALL_MEMORY_TOOLS = [save_memory_tool, search_memory_tool, list_saved_memories_tool]
+delete_memory_tool = ToolDefinition(
+    name="delete_memory",
+    description=(
+        "Permanently delete a saved memory (fact, task, or document) by memory_id. "
+        "Use list_saved_memories first when the user wants to forget something but has not "
+        "provided a memory_id. Deletes all chunks belonging to that memory."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "memory_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "memory_id from list_saved_memories or a prior save_memory result.",
+            },
+        },
+        "required": ["memory_id"],
+        "additionalProperties": False,
+    },
+    required_scopes=["memory:write"],
+    handler=delete_memory,
+)
+
+
+ALL_MEMORY_TOOLS = [
+    save_memory_tool,
+    search_memory_tool,
+    list_saved_memories_tool,
+    delete_memory_tool,
+]

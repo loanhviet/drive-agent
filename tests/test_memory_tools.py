@@ -372,3 +372,95 @@ def test_list_saved_memories_tool_requires_memory_read_scope(memory_environment,
 
     assert result["ok"] is False
     assert result["error"]["code"] == "missing_scope"
+
+
+def test_delete_memory_removes_fact_and_reports_not_found(memory_environment):
+    with execution_context(actor()):
+        saved = memory.save_memory(content="Tôi thích Python", category="user_preference")
+        listed = memory.list_saved_memories()
+        deleted = memory.delete_memory(saved["memory_id"])
+        listed_after = memory.list_saved_memories()
+        missing = memory.delete_memory(saved["memory_id"])
+
+    assert deleted == {
+        "status": "deleted",
+        "memory_id": saved["memory_id"],
+        "points_deleted": 1,
+    }
+    assert listed["results_count"] == 1
+    assert listed_after["status"] == "empty"
+    assert missing == {
+        "status": "not_found",
+        "memory_id": saved["memory_id"],
+        "points_deleted": 0,
+    }
+
+
+def test_delete_memory_removes_all_document_chunks(monkeypatch, memory_environment):
+    documents = memory_environment["documents"]
+    document = documents.put(
+        "user-1",
+        "full document content",
+        {"file_id": "drive-file", "file_name": "notes.txt", "source_type": "drive_file"},
+    )
+    monkeypatch.setattr(
+        memory,
+        "chunk_document",
+        lambda _content: [
+            DocumentChunk("introduction", 0, 0, 12, "Introduction"),
+            DocumentChunk("QUANTUM_MIDDLE_CONCEPT details", 1, 13, 43, "Results"),
+            DocumentChunk("conclusion", 2, 44, 54, "Conclusion"),
+        ],
+    )
+
+    with execution_context(actor()):
+        saved = memory.save_memory(document_ref=document.document_ref, category="document")
+        deleted = memory.delete_memory(saved["memory_id"])
+
+    remaining = memory_environment["store"].list_all_memories(user_id="user-1")
+    assert deleted["status"] == "deleted"
+    assert deleted["points_deleted"] == 3
+    assert remaining == []
+
+
+def test_delete_memory_is_tenant_scoped(memory_environment):
+    store = memory_environment["store"]
+    store.save_memories(
+        [
+            (
+                "private fact",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-2",
+                    "memory_id": "other-user-memory",
+                    "source_type": "fact",
+                },
+            ),
+        ]
+    )
+
+    with execution_context(actor("user-1")):
+        result = memory.delete_memory("other-user-memory")
+
+    assert result["status"] == "not_found"
+    remaining = store.list_memory_points("user-2", "other-user-memory")
+    assert len(remaining) == 1
+
+
+def test_delete_memory_validates_empty_id(memory_environment):
+    with execution_context(actor()):
+        with pytest.raises(ValueError, match="memory_id"):
+            memory.delete_memory("   ")
+
+
+def test_delete_memory_tool_requires_memory_write_scope(memory_environment):
+    registry = ToolRegistry(
+        authenticator=lambda _token: actor(scopes=["memory:read"]),
+        audit_store=None,
+    )
+    registry.register(memory.delete_memory_tool)
+
+    result = registry.call("delete_memory", {"memory_id": "any"}, "token")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "missing_scope"

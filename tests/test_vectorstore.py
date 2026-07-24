@@ -32,6 +32,54 @@ def test_upsert_and_search_memory_with_user_filter(tmp_path):
     assert results[0]["score"] > 0.99
 
 
+def test_delete_by_memory_id_removes_all_chunks_for_owner_only(tmp_path):
+    store = make_store(tmp_path)
+    store.save_memories(
+        [
+            (
+                "chunk-0",
+                [1.0, 0.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": "doc-1",
+                    "source_type": "document",
+                    "chunk_index": 0,
+                },
+            ),
+            (
+                "chunk-1",
+                [0.0, 1.0, 0.0],
+                {
+                    "user_id": "user-1",
+                    "memory_id": "doc-1",
+                    "source_type": "document",
+                    "chunk_index": 1,
+                },
+            ),
+            (
+                "other-user",
+                [0.0, 0.0, 1.0],
+                {
+                    "user_id": "user-2",
+                    "memory_id": "other-doc",
+                    "source_type": "document",
+                    "chunk_index": 0,
+                },
+            ),
+        ]
+    )
+
+    deleted = store.delete_by_memory_id("user-1", "doc-1")
+    remaining_owner = store.list_memory_points("user-1", "doc-1")
+    remaining_other = store.list_memory_points("user-2", "other-doc")
+
+    assert deleted == 2
+    assert remaining_owner == []
+    assert len(remaining_other) == 1
+    assert store.delete_by_memory_id("user-1", "doc-1") == 0
+    assert store.delete_by_memory_id("user-1", "other-doc") == 0
+
+
 def test_batch_upsert_writes_all_records_in_one_request(monkeypatch, tmp_path):
     store = make_store(tmp_path)
     store.ensure_collection()
